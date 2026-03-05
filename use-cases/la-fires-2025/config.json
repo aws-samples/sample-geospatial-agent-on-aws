@@ -1,0 +1,111 @@
+{
+  "name": "LA Palisades Fire - January 2025",
+  "description": "Wildfire damage analysis for the Palisades Fire that started January 7, 2025 in Pacific Palisades, California. This catastrophic wildfire burned over 21,000 acres and threatened thousands of structures in the coastal community.",
+  "location": "Pacific Palisades, Los Angeles County, California",
+  "user_question": "Analyze the burn damage from the Palisades Fire in Pacific Palisades, California that started in January 2025.",
+  "dates": {
+    "before": "2024-12-18",
+    "after": "2025-03-08",
+    "fire_start": "2025-01-07"
+  },
+  "center_coordinates": {
+    "lat": 34.0796,
+    "lon": -118.5932
+  },
+  "index_type": "nbr",
+  "scenario_version": "1.0",
+  "created_date": "2025-11-25",
+  "tool_calls": [
+    {
+      "name": "find_location_boundary",
+      "params": {
+        "location_name": "Pacific Palisades, Los Angeles County, California"
+      },
+      "result": "Found boundary for Pacific Palisades, Los Angeles County, California"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/la-fires-2025/geometry.geojson",
+        "title": "Pacific Palisades Fire Boundary"
+      },
+      "result": "Displayed fire analysis area boundary on map"
+    },
+    {
+      "name": "get_rasters",
+      "params": {
+        "location": "Pacific Palisades, Los Angeles County, California",
+        "date": "2024-12-18",
+        "cloud_coverage_max": 20
+      },
+      "result": "Retrieved satellite imagery for 2024-12-18 (pre-fire baseline)"
+    },
+    {
+      "name": "get_rasters",
+      "params": {
+        "location": "Pacific Palisades, Los Angeles County, California",
+        "date": "2025-03-08",
+        "cloud_coverage_max": 20
+      },
+      "result": "Retrieved satellite imagery for 2025-03-08 (post-fire assessment)"
+    },
+    {
+      "name": "run_bandmath",
+      "params": {
+        "location": "Pacific Palisades, Los Angeles County, California",
+        "index_type": "NBR",
+        "date_str": "2024-12-18"
+      },
+      "result": "Calculated NBR (Normalized Burn Ratio) for pre-fire baseline"
+    },
+    {
+      "name": "run_bandmath",
+      "params": {
+        "location": "Pacific Palisades, Los Angeles County, California",
+        "index_type": "NBR",
+        "date_str": "2025-03-08"
+      },
+      "result": "Calculated NBR (Normalized Burn Ratio) for post-fire assessment"
+    },
+    
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/la-fires-2025/before/tci-2024-12-18.tif",
+        "title": "Pacific Palisades True Color Image - 2024-12-18 (Pre-Fire)"
+      },
+      "result": "Displayed pre-fire satellite image"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/la-fires-2025/before/nbr-2024-12-18.tif",
+        "title": "Pacific Palisades NBR - 2024-12-18 (Pre-Fire Baseline)"
+      },
+      "result": "Displayed pre-fire NBR baseline"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/la-fires-2025/after/tci-2025-03-08.tif",
+        "title": "Pacific Palisades True Color Image - 2025-03-08 (Post-Fire)"
+      },
+      "result": "Displayed post-fire satellite image"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/la-fires-2025/after/nbr-2025-03-08.tif",
+        "title": "Pacific Palisades NBR - 2025-03-08 (Post-Fire Assessment)"
+      },
+      "result": "Displayed post-fire NBR assessment showing burn severity"
+    },
+    {
+      "name": "calculator",
+      "params": {
+        "expression": "Statistical analysis of burn severity and area calculations"
+      },
+      "result": "Computed burn area statistics: 21,000 acres burned with 29.4% high severity damage"
+    }
+  ]
+}

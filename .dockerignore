@@ -1,0 +1,39 @@
+# Ignore everything that's not needed
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+**/env/
+**/venv/
+**/.venv/
+**/.tox/
+**/.coverage
+**/.coverage.*
+**/.cache
+**/.mypy_cache/
+**/.pytest_cache/
+**/.hypothesis/
+**/.DS_Store
+**/*.egg-info/
+**/dist/
+**/build/
+**/temp/
+**/cache/
+**/*.tif
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.log
+**/cdk.out/
+
+# Specific files
+environment.yml
+test_*.py
+**/local/
+README*.md
+streamlit_*.py
+
+# Git
+.git/
+.gitignore

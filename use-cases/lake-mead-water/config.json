@@ -1,0 +1,114 @@
+{
+  "name": "Lake Mead Water Level Analysis - Nevada/Arizona",
+  "description": "Water level comparison at Lake Mead reservoir between 2020 and 2025, analyzing drought impact on the Colorado River Basin's largest reservoir using NDWI satellite analysis.",
+  "location": "Lake Mead, Nevada/Arizona Border",
+  "user_question": "Compare water levels at Lake Mead, Nevada this year and five years ago.",
+  "dates": {
+    "before": "2020-09-27",
+    "after": "2025-10-01"
+  },
+  "center_coordinates": {
+    "lat": 36.1486,
+    "lon": -114.4312
+  },
+  "reservoir_area": {
+    "analysis_area_km2": 473.2,
+    "analysis_area_hectares": 47320,
+    "analysis_area_acres": 116900
+  },
+  "index_type": "ndwi",
+  "scenario_version": "1.0",
+  "created_date": "2025-11-26",
+  "tool_calls": [
+    {
+      "name": "find_location_boundary",
+      "params": {
+        "location_name": "Lake Mead, Nevada/Arizona Border"
+      },
+      "result": "Found boundary for Lake Mead reservoir"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/lake-mead-water/geometry.geojson",
+        "title": "Lake Mead Analysis Boundary"
+      },
+      "result": "Displayed reservoir analysis area boundary on map"
+    },
+    {
+      "name": "get_rasters",
+      "params": {
+        "location": "Lake Mead, Nevada/Arizona Border",
+        "date": "2020-09-27",
+        "cloud_coverage_max": 20
+      },
+      "result": "Retrieved satellite imagery for 2020-09-27 (baseline water levels)"
+    },
+    {
+      "name": "get_rasters",
+      "params": {
+        "location": "Lake Mead, Nevada/Arizona Border",
+        "date": "2025-10-01",
+        "cloud_coverage_max": 20
+      },
+      "result": "Retrieved satellite imagery for 2025-10-01 (current water levels)"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/lake-mead-water/before/tci-2020-09-27.tif",
+        "title": "Lake Mead True Color Image - 2020-09-27 (Baseline)"
+      },
+      "result": "Displayed 2020 baseline satellite image"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/lake-mead-water/after/tci-2025-10-01.tif",
+        "title": "Lake Mead True Color Image - 2025-10-01 (Current)"
+      },
+      "result": "Displayed current satellite image showing reduced water levels"
+    },
+    {
+      "name": "run_bandmath",
+      "params": {
+        "location": "Lake Mead, Nevada/Arizona Border",
+        "index_type": "NDWI",
+        "date_str": "2020-09-27"
+      },
+      "result": "Calculated NDWI (Normalized Difference Water Index) for 2020 baseline"
+    },
+    {
+      "name": "run_bandmath",
+      "params": {
+        "location": "Lake Mead, Nevada/Arizona Border",
+        "index_type": "NDWI",
+        "date_str": "2025-10-01"
+      },
+      "result": "Calculated NDWI (Normalized Difference Water Index) for current state"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/lake-mead-water/before/ndwi-2020-09-27.tif",
+        "title": "Lake Mead NDWI - 2020-09-27 (Baseline Water Extent)"
+      },
+      "result": "Displayed 2020 baseline NDWI showing water coverage"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/lake-mead-water/after/ndwi-2025-10-01.tif",
+        "title": "Lake Mead NDWI - 2025-10-01 (Current Water Extent)"
+      },
+      "result": "Displayed current NDWI showing significant water loss"
+    },
+    {
+      "name": "calculator",
+      "params": {
+        "expression": "Water loss calculation: water_area_2020 - water_area_2025"
+      },
+      "result": "Computed drought impact: 31.5 km² (10.9%) water loss, 33.9 km² (19.6%) exposed lakebed increase"
+    }
+  ]
+}

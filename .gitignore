@@ -1,0 +1,66 @@
+# Archive folders
+archive/
+_archive/
+_markdowns/
+
+# Cache directories
+cache/
+__pycache__/
+*.pyc
+*.pyo
+
+# Agentcore specifics
+.bedrock_agentcore.yaml
+*_role_info.json
+
+# Temp directories and files
+temp/
+*.tmp
+
+# Large raster files
+*.tif
+*.tiff
+
+# Jupyter notebook checkpoints
+**/.ipynb_checkpoints/
+*.ipynb
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Environment files (may contain secrets)
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node.js
+node_modules/
+dist/
+build/
+
+# CDK outputs
+cdk.out/
+cdk.context.json
+
+# AWS/Docker build artifacts
+.aws/
+*.log
+
+# Kiro sessions
+.kiro/
+kiro_sessions/

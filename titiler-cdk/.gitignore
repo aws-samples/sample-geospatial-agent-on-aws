@@ -1,0 +1,43 @@
+# CDK
+*.js
+!jest.config.js
+*.d.ts
+node_modules
+cdk.out
+.cdk.staging
+
+# BUT keep these important files
+!Dockerfile
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Test artifacts
+test.png
+*.tif
+*.tif.aux.xml
+
+# CDK Context & Staging
+cdk.context.json
+.cdk.staging/
+
+# Build outputs
+dist/
+build/

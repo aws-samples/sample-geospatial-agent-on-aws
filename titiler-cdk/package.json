@@ -1,0 +1,18 @@
+{
+  "name": "titiler-cdk",
+  "version": "1.0.0",
+  "description": "TiTiler Lambda + API Gateway with API Key",
+  "scripts": {
+    "build": "tsc",
+    "deploy": "cdk deploy --require-approval never"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.189.1",
+    "constructs": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "aws-cdk": "^2.189.1"
+  }
+}

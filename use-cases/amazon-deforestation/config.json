@@ -1,0 +1,116 @@
+{
+  "name": "Amazon Deforestation Verification - Brazil Sourcing Field",
+  "description": "Deforestation-free sourcing verification for a raw material sourcing field in the Brazilian Amazon. Analysis determines whether the field has been cleared after 2020, critical for EU Deforestation Regulation (EUDR) compliance and sustainability commitments.",
+  "location": "Rondônia State, Amazon Rainforest, Brazil",
+  "user_question": "I want to validate whether the field where some of my raw material has been sourced from is deforestation free. Verify whether the field has been cleared after 2020. Here is the field boundary:\n\n```json\n{\"type\": \"FeatureCollection\", \"features\": [{\"id\": \"9378c85bafa39dddcc9a812fa16cea06\", \"type\": \"Feature\", \"properties\": {}, \"geometry\": {\"coordinates\": [[[-61.16669784980104, -10.405913533089219], [-61.1732284572179, -10.361419473997543], [-61.1956382987904, -10.361419473997543], [-61.197678249637875, -10.376169745596783], [-61.21066309135141, -10.376562414034439], [-61.212445679969946, -10.361419473997543], [-61.25986566353518, -10.36161646780458], [-61.26061364239675, -10.373616550835308], [-61.237035652027544, -10.373420090196902], [-61.23342970172324, -10.380291026436112], [-61.23422474088726, -10.382840371854002], [-61.255780481711895, -10.383428473600361], [-61.259735612642785, -10.39204498479097], [-61.216465133921304, -10.393218662247321], [-61.21667150502195, -10.406303565638524], [-61.16669784980104, -10.405913533089219]]], \"type\": \"Polygon\"}}]}\n```",
+  "dates": {
+    "before": "2020-12-13",
+    "after": "2025-09-28",
+    "cutoff_date": "2020-01-01"
+  },
+  "center_coordinates": {
+    "lat": -10.384,
+    "lon": -61.213
+  },
+  "field_area": {
+    "km2": 35.74,
+    "hectares": 3574,
+    "acres": 8831
+  },
+  "index_type": "ndvi",
+  "compliance_framework": "EU Deforestation Regulation (EUDR)",
+  "scenario_version": "1.0",
+  "created_date": "2025-11-26",
+  "tool_calls": [
+    {
+      "name": "create_bbox_from_coordinates",
+      "params": {
+        "geojson": "{\"type\": \"FeatureCollection\", \"features\": [{\"id\": \"9378c85bafa39dddcc9a812fa16cea06\", \"type\": \"Feature\", \"properties\": {}, \"geometry\": {\"coordinates\": [[[-61.16669784980104, -10.405913533089219], [-61.1732284572179, -10.361419473997543], [-61.1956382987904, -10.361419473997543], [-61.197678249637875, -10.376169745596783], [-61.21066309135141, -10.376562414034439], [-61.212445679969946, -10.361419473997543], [-61.25986566353518, -10.36161646780458], [-61.26061364239675, -10.373616550835308], [-61.237035652027544, -10.373420090196902], [-61.23342970172324, -10.380291026436112], [-61.23422474088726, -10.382840371854002], [-61.255780481711895, -10.383428473600361], [-61.259735612642785, -10.39204498479097], [-61.216465133921304, -10.393218662247321], [-61.21667150502195, -10.406303565638524], [-61.16669784980104, -10.405913533089219]]], \"type\": \"Polygon\"}}]}"
+      },
+      "result": "Processed field boundary geometry for Rondônia sourcing field"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/amazon-deforestation/geometry.geojson",
+        "title": "Rondônia Sourcing Field Boundary"
+      },
+      "result": "Displayed sourcing field boundary on map"
+    },
+    {
+      "name": "get_rasters",
+      "params": {
+        "location": "Rondônia State, Amazon Rainforest, Brazil",
+        "date": "2020-12-13",
+        "cloud_coverage_max": 20
+      },
+      "result": "Retrieved satellite imagery for 2020-12-13 (EUDR cutoff baseline)"
+    },
+    {
+      "name": "get_rasters",
+      "params": {
+        "location": "Rondônia State, Amazon Rainforest, Brazil",
+        "date": "2025-09-28",
+        "cloud_coverage_max": 20
+      },
+      "result": "Retrieved satellite imagery for 2025-09-28 (current state)"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/amazon-deforestation/before/tci-2020-12-13.tif",
+        "title": "Rondônia Field True Color Image - 2020-12-13 (Baseline)"
+      },
+      "result": "Displayed 2020 baseline satellite image"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/amazon-deforestation/after/tci-2025-09-28.tif",
+        "title": "Rondônia Field True Color Image - 2025-09-28 (Current)"
+      },
+      "result": "Displayed current satellite image showing cleared areas"
+    },    
+    {
+      "name": "run_bandmath",
+      "params": {
+        "location": "Rondônia State, Amazon Rainforest, Brazil",
+        "index_type": "NDVI",
+        "date_str": "2020-12-13"
+      },
+      "result": "Calculated NDVI (Normalized Difference Vegetation Index) for 2020 baseline"
+    },
+    {
+      "name": "run_bandmath",
+      "params": {
+        "location": "Rondônia State, Amazon Rainforest, Brazil",
+        "index_type": "NDVI",
+        "date_str": "2025-09-28"
+      },
+      "result": "Calculated NDVI (Normalized Difference Vegetation Index) for current state"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/amazon-deforestation/before/ndvi-2020-12-13.tif",
+        "title": "Rondônia Field NDVI - 2020-12-13 (Baseline Vegetation)"
+      },
+      "result": "Displayed 2020 baseline NDVI showing dense forest coverage"
+    },
+    {
+      "name": "display_visual",
+      "params": {
+        "s3_url": "s3://bucket/use-cases/amazon-deforestation/after/ndvi-2025-09-28.tif",
+        "title": "Rondônia Field NDVI - 2025-09-28 (Current Vegetation)"
+      },
+      "result": "Displayed current NDVI showing significant vegetation loss"
+    },
+    {
+      "name": "calculator",
+      "params": {
+        "expression": "Forest loss calculation: (dense_vegetation_2020 + very_dense_vegetation_2020) - (dense_vegetation_2025 + very_dense_vegetation_2025)"
+      },
+      "result": "Computed deforestation statistics: 828 hectares (23.2%) forest loss detected. Field is NON-COMPLIANT with EUDR requirements."
+    }
+  ]
+}
