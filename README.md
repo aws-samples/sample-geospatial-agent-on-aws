@@ -362,6 +362,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to th
 
 This project is licensed under the Apache-2.0 License. See [LICENSE](LICENSE) for details.
 
-## Security
-
-See [SECURITY.md](SECURITY.md) for security issue reporting guidelines.
