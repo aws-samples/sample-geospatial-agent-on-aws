@@ -21,7 +21,7 @@ An AI agent that analyzes satellite imagery for any location on Earth using natu
 
 | Component | Technology |
 |-----------|------------|
-| **Agent** | [Strands Agents](https://github.com/awslabs/strands-agents) with Claude Sonnet 4.6 on [Amazon Bedrock AgentCore Runtime](https://aws.amazon.com/bedrock/agentcore/) |
+| **Agent** | [Strands Agents](https://strandsagents.com/latest/) with Claude Sonnet 4.6 on [Amazon Bedrock AgentCore Runtime](https://aws.amazon.com/bedrock/agentcore/) |
 | **Tools** | Sentinel-2 imagery, NDVI/NDWI/NBR analysis, OSM boundaries, Amazon Location Service (MCP) hosted on AgentCore Runtime|
 | **UI** | React + TypeScript + MapLibre GL on ECS Fargate behind CloudFront, wt. Cognito auth |
 
@@ -122,7 +122,7 @@ sed -i.bak \
 ### Step 4: Deploy Agent
 
 ```bash
-./deploy.sh    # ~5 minutes (first deployment), ~3 minutes (updates)
+./deploy.sh
 ```
 
 > **Optional: Deploy with Langfuse observability** — Sign up at [langfuse.com](https://langfuse.com/), add these to `geo_agent/.env`, then run `./deploy_with_langfuse.sh` instead:
@@ -225,7 +225,7 @@ sed -i.bak \
 
 ```bash
 npm install
-./deploy.sh -y          # ~7 minutes
+./deploy.sh -y
 
 # Or if you use finch
 ./deploy_finch.sh -y
@@ -271,7 +271,7 @@ cd frontend-cdk && ./scripts/diagnose.sh
 ### Fast Updates (Code Changes Only)
 
 ```bash
-# From frontend-cdk directory — rebuilds container only (~5-8 min)
+# From frontend-cdk directory — rebuilds container only
 ./scripts/quick-update.sh
 ```
 
