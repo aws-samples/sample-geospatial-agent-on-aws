@@ -110,6 +110,7 @@ cp .env.example .env
 
 # Auto-populate required values
 sed -i.bak \
+  -e "s|AWS_REGION=.*|AWS_REGION=${AWS_REGION}|" \
   -e "s|S3_BUCKET_NAME=.*|S3_BUCKET_NAME=${S3_BUCKET_NAME}|" \
   -e "s|AGENTCORE_ARN=.*|AGENTCORE_ARN=arn:aws:iam::${AWS_ACCOUNT}:role/agentcore-geospatial-agent-on-aws-role|" \
   .env && rm -f .env.bak
