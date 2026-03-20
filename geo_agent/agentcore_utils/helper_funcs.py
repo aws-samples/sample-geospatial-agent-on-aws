@@ -179,7 +179,13 @@ def create_agentcore_role(agent_name: str, s3_bucket_name: str, region: str = No
         # Pause to make sure role is created
         time.sleep(10)
     except iam_client.exceptions.EntityAlreadyExistsException:
-        print(f"Role {agentcore_role_name} already exists - updating policy")
+        print(f"Role {agentcore_role_name} already exists - updating trust and permissions policies")
+        # Update trust policy so the role can be assumed in the current region
+        iam_client.update_assume_role_policy(
+            RoleName=agentcore_role_name,
+            PolicyDocument=assume_role_policy_document_json
+        )
+        print("Trust policy updated successfully")
         # Get existing role info
         agentcore_iam_role = iam_client.get_role(RoleName=agentcore_role_name)
 

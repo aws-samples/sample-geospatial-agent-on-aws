@@ -1,5 +1,6 @@
 """
-Geospatial Agent on AWS - Amazon Bedrock AgentCore with Langfuse tracing
+Geospatial Agent on AWS - Amazon Bedrock AgentCore with observability
+(AgentCore/CloudWatch via ADOT, optional Langfuse)
 """
 import logging
 import os
@@ -66,10 +67,21 @@ async def sat_image_analyzer_agent(payload, context=None):
     os.environ['AGENT_USER_ID'] = user_id
     logger.info(f"📊 Session ID: {session_id}, User ID: {user_id}")
 
-    # Initialize Strands telemetry and setup OTLP exporter
-    strands_telemetry = StrandsTelemetry()
-    strands_telemetry.setup_otlp_exporter()
-    logger.info("✅ OTLP exporter initialized for Langfuse")
+    # Telemetry setup:
+    # - If Langfuse is configured: use StrandsTelemetry to export to Langfuse endpoint
+    # - Otherwise: do NOT create StrandsTelemetry — let ADOT (aws-opentelemetry-distro)
+    #   handle everything via the global TracerProvider it sets up automatically.
+    #   Strands auto-detects the global provider (see Strands docs "Option 1").
+    from utils.langfuse_setup import setup_langfuse_env_vars
+    setup_langfuse_env_vars()  # Sets OTEL endpoint/headers if Langfuse vars are present
+
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        strands_telemetry = StrandsTelemetry()
+        strands_telemetry.setup_otlp_exporter()
+        strands_telemetry.setup_meter(enable_console_exporter=False, enable_otlp_exporter=True)
+        logger.info(f"✅ OTLP exporter initialized: {os.environ['OTEL_EXPORTER_OTLP_ENDPOINT']}")
+    else:
+        logger.info("ℹ️ Using ADOT global TracerProvider for AgentCore Observability")
 
     try:
         with mcp_client:

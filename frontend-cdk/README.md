@@ -60,6 +60,7 @@ S3_BUCKET_NAME=geospatial-agent-on-aws-YOUR_ACCOUNT_ID
 ADMIN_EMAIL=your-email@example.com
 
 # Optional: AWS Region (defaults to us-east-1)
+# Supports any region. WAF is only created in us-east-1.
 AWS_REGION=us-east-1
 ```
 
@@ -88,9 +89,12 @@ npm install
 - **ECS Fargate**: Serverless container orchestration (2 tasks, auto-scaling 1-10)
 - **Application Load Balancer**: HTTP traffic distribution with health checks
 - **CloudFront**: Global CDN with HTTPS and caching
+- **WAF WebACL**: AWS Managed Rules for CloudFront (us-east-1 only; skipped in other regions)
 - **Cognito User Pool**: Admin-only authentication (no self-signup)
 - **Container**: Multi-stage Docker build (React frontend + Express backend)
 - **CloudWatch Logs**: Application logs retention (7 days)
+
+> **Note:** WAF with `CLOUDFRONT` scope can only be created in `us-east-1`. When deploying to other regions, the WAF is skipped and CloudFront runs without WAF protection. For production in non-us-east-1 regions, consider a separate WAF stack in us-east-1.
 
 **Deployment time:** ~7 minutes
 
@@ -165,7 +169,7 @@ aws logs tail /ecs/geospatial-agent-dev --follow --region us-east-1 | grep -i er
 | "Cannot GET /" error | CloudFront cached old error - run `./scripts/fix-cloudfront-cache.sh` |
 | API calls fail with 401 | JWT token expired - logout and login again |
 | "Not authorized to invoke AgentCore" | IAM policy issue - redeploy CDK to fix permissions |
-| Container not starting | Check logs: `aws logs tail /ecs/geospatial-agent-dev --follow` |
+| Agent responses slow / OTEL localhost errors | Ensure Langfuse env vars are set or OTEL exporter is disabled when not needed || Container not starting | Check logs: `aws logs tail /ecs/geospatial-agent-dev --follow` |
 
 **Debug scripts:**
 
