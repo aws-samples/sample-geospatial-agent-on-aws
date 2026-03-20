@@ -70,9 +70,16 @@ if (!COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID) {
   loadRuntimeConfig();
 }
 
-const cognitoClient = new CognitoIdentityProviderClient({
-  region: COGNITO_REGION,
-});
+let cognitoClient: CognitoIdentityProviderClient | null = null;
+
+function getCognitoClient(): CognitoIdentityProviderClient {
+  if (!cognitoClient || cognitoClient.config.region !== COGNITO_REGION) {
+    cognitoClient = new CognitoIdentityProviderClient({
+      region: COGNITO_REGION,
+    });
+  }
+  return cognitoClient;
+}
 
 export interface AuthTokens {
   idToken: string;
@@ -145,7 +152,7 @@ export async function login(
       },
     });
 
-    const response = await cognitoClient.send(command);
+    const response = await getCognitoClient().send(command);
 
     // Check if password change is required (first login)
     if (response.ChallengeName === ChallengeNameType.NEW_PASSWORD_REQUIRED) {
@@ -216,7 +223,7 @@ export async function changePasswordFirstLogin(
       },
     });
 
-    const response = await cognitoClient.send(command);
+    const response = await getCognitoClient().send(command);
 
     if (response.AuthenticationResult) {
       const tokens: AuthTokens = {
@@ -266,7 +273,7 @@ export async function logout(): Promise<void> {
       const command = new GlobalSignOutCommand({
         AccessToken: tokens.accessToken,
       });
-      await cognitoClient.send(command);
+      await getCognitoClient().send(command);
     }
   } catch {
     // Logout error - continue to clear local storage

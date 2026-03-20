@@ -47,7 +47,7 @@ An AI agent that analyzes satellite imagery for any location on Earth using natu
    ```
 6. **AgentCore CLI**:
    ```bash
-   pip install bedrock-agentcore==0.0.1 bedrock-agentcore-starter-toolkit==0.3.0
+   pip install bedrock-agentcore==1.1.2 bedrock-agentcore-starter-toolkit==0.3.0
    ```
 7. **Bedrock model access** for Claude Sonnet 4.6 in us-east-1 (granted automatically - ensure IAM/SCPs don't restrict it)
 

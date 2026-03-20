@@ -345,6 +345,9 @@ export class GeospatialAgentStack extends cdk.Stack {
     // Enable ALB access logs (AwsSolutions-ELB2)
     fargateService.loadBalancer.logAccessLogs(albLogsBucket);
 
+    // Increase ALB idle timeout for long-running SSE/streaming agent responses
+    fargateService.loadBalancer.setAttribute('idle_timeout.timeout_seconds', '120');
+
     // ========================================
     // ALB Listener Rules - Secure ALB to only accept CloudFront traffic
     // ========================================
@@ -438,77 +441,84 @@ export class GeospatialAgentStack extends cdk.Stack {
     // ========================================
     // AWS WAF WebACL for CloudFront (AwsSolutions-CFR2)
     // ========================================
-    // WAF must be in us-east-1 for CloudFront associations
-    const webAcl = new wafv2.CfnWebACL(this, 'WebACL', {
-      scope: 'CLOUDFRONT',
-      defaultAction: { allow: {} },
-      visibilityConfig: {
-        sampledRequestsEnabled: true,
-        cloudWatchMetricsEnabled: true,
-        metricName: `geospatial-agent-${environment}-waf`,
-      },
-      rules: [
-        {
-          name: 'AWSManagedRulesCommonRuleSet',
-          priority: 1,
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesCommonRuleSet',
+    // WAF with CLOUDFRONT scope can only be created in us-east-1
+    const isUsEast1 = this.region === 'us-east-1';
+
+    let webAclArn: string | undefined;
+    if (isUsEast1) {
+      const webAcl = new wafv2.CfnWebACL(this, 'WebACL', {
+        scope: 'CLOUDFRONT',
+        defaultAction: { allow: {} },
+        visibilityConfig: {
+          sampledRequestsEnabled: true,
+          cloudWatchMetricsEnabled: true,
+          metricName: `geospatial-agent-${environment}-waf`,
+        },
+        rules: [
+          {
+            name: 'AWSManagedRulesCommonRuleSet',
+            priority: 1,
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesCommonRuleSet',
+              },
+            },
+            overrideAction: { none: {} },
+            visibilityConfig: {
+              sampledRequestsEnabled: true,
+              cloudWatchMetricsEnabled: true,
+              metricName: 'CommonRuleSetMetric',
             },
           },
-          overrideAction: { none: {} },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: 'CommonRuleSetMetric',
-          },
-        },
-        {
-          name: 'AWSManagedRulesKnownBadInputsRuleSet',
-          priority: 2,
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesKnownBadInputsRuleSet',
+          {
+            name: 'AWSManagedRulesKnownBadInputsRuleSet',
+            priority: 2,
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesKnownBadInputsRuleSet',
+              },
+            },
+            overrideAction: { none: {} },
+            visibilityConfig: {
+              sampledRequestsEnabled: true,
+              cloudWatchMetricsEnabled: true,
+              metricName: 'KnownBadInputsMetric',
             },
           },
-          overrideAction: { none: {} },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: 'KnownBadInputsMetric',
-          },
-        },
-        {
-          name: 'AWSManagedRulesAmazonIpReputationList',
-          priority: 3,
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesAmazonIpReputationList',
+          {
+            name: 'AWSManagedRulesAmazonIpReputationList',
+            priority: 3,
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesAmazonIpReputationList',
+              },
+            },
+            overrideAction: { none: {} },
+            visibilityConfig: {
+              sampledRequestsEnabled: true,
+              cloudWatchMetricsEnabled: true,
+              metricName: 'IpReputationMetric',
             },
           },
-          overrideAction: { none: {} },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: 'IpReputationMetric',
-          },
-        },
-      ],
-    });
+        ],
+      });
+      webAclArn = webAcl.attrArn;
+    }
 
     // ========================================
     // CloudFront Distribution
     // ========================================
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
-      webAclId: webAcl.attrArn,
+      ...(webAclArn && { webAclId: webAclArn }),
       comment: `Agentic AI for Earth - ${environment}`,
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(fargateService.loadBalancer, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           httpPort: 80,
+          readTimeout: cdk.Duration.seconds(60),
           customHeaders: {
             [customHeaderName]: customHeaderValue,
           },
@@ -734,7 +744,15 @@ export class GeospatialAgentStack extends cdk.Stack {
       },
     ]);
 
-    // CFR2: WAF is now integrated via CloudFront WebACL association
+    // CFR2: WAF is associated when deployed in us-east-1; suppress when not
+    if (!isUsEast1) {
+      NagSuppressions.addResourceSuppressions(distribution, [
+        {
+          id: 'AwsSolutions-CFR2',
+          reason: 'WAF WebACL with CLOUDFRONT scope can only be created in us-east-1. This stack is deployed outside us-east-1, so WAF association is skipped. For production, deploy a cross-region WAF or use a us-east-1 stack.',
+        },
+      ]);
+    }
 
     // CFR4/CFR5: CloudFront uses default certificate which forces TLSv1 minimum for viewer connections.
     // The minimumProtocolVersion is set to TLS_V1_2_2021 but only applies with custom domains/certificates.

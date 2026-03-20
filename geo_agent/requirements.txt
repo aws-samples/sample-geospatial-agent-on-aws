@@ -5,23 +5,26 @@ s3transfer==0.16.0
 jmespath==1.0.1
 
 # Strands framework
-strands-agents==1.21.0
+strands-agents[otel]==1.21.0
 strands-agents-tools==0.2.19
 
 # Bedrock AgentCore
 bedrock-agentcore==1.1.2
 bedrock-agentcore-starter-toolkit==0.2.5
 
-# Observability - fixed OpenTelemetry version conflicts
+# Observability - versions aligned with aws-opentelemetry-distro 0.16.0
+aws-opentelemetry-distro==0.16.0
 langfuse==3.11.2
-opentelemetry-api==1.39.1
-opentelemetry-sdk==1.39.1
-opentelemetry-instrumentation==0.60b1
-opentelemetry-instrumentation-threading==0.60b1
-opentelemetry-exporter-otlp-proto-common==1.39.1
-opentelemetry-exporter-otlp-proto-http==1.39.1
-opentelemetry-proto==1.39.1
-opentelemetry-semantic-conventions==0.60b1
+opentelemetry-api==1.40.0
+opentelemetry-sdk==1.40.0
+opentelemetry-distro==0.61b0
+opentelemetry-instrumentation==0.61b0
+opentelemetry-instrumentation-threading==0.61b0
+opentelemetry-exporter-otlp==1.40.0
+opentelemetry-exporter-otlp-proto-common==1.40.0
+opentelemetry-exporter-otlp-proto-http==1.40.0
+opentelemetry-proto==1.40.0
+opentelemetry-semantic-conventions==0.61b0
 
 # HTTP and networking
 aiohttp==3.13.3
@@ -109,4 +112,4 @@ frozenlist==1.8.0
 propcache==0.4.1
 yarl==1.22.0
 googleapis-common-protos==1.72.0
-protobuf==6.33.2
+protobuf>=6.33.2,<7.0

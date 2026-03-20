@@ -78,4 +78,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 # Copy project files
 COPY . .
 
-CMD ["python", "-m", "geospatial_agent_on_aws"]
+CMD ["opentelemetry-instrument", "python", "-m", "geospatial_agent_on_aws"]
