@@ -288,7 +288,7 @@ export class GeospatialAgentStack extends cdk.Stack {
     // S3 Access Logs Bucket (AwsSolutions-S1) - Centralized access logging
     // ========================================
     const s3AccessLogsBucket = new s3.Bucket(this, 'S3AccessLogsBucket', {
-      // Let CDK auto-generate bucket name to avoid conflicts on redeploy
+      bucketName: `geospatial-agent-s3-access-logs-${environment}-${cdk.Aws.ACCOUNT_ID}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
@@ -298,7 +298,7 @@ export class GeospatialAgentStack extends cdk.Stack {
     });
 
     const albLogsBucket = new s3.Bucket(this, 'AlbLogsBucket', {
-      // Let CDK auto-generate bucket name to avoid conflicts on redeploy
+      bucketName: `geospatial-agent-alb-logs-${environment}-${cdk.Aws.ACCOUNT_ID}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true, // (AwsSolutions-S10)
@@ -426,7 +426,7 @@ export class GeospatialAgentStack extends cdk.Stack {
     // CloudFront Access Logs Bucket (AwsSolutions-S1, S10)
     // ========================================
     const cfLogsBucket = new s3.Bucket(this, 'CloudFrontLogsBucket', {
-      // Let CDK auto-generate bucket name to avoid conflicts on redeploy
+      bucketName: `geospatial-agent-cf-logs-${environment}-${cdk.Aws.ACCOUNT_ID}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
