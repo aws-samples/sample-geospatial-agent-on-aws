@@ -15,12 +15,15 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // AWS Clients
+// Extract region from AGENT_RUNTIME_ARN (e.g. arn:aws:bedrock-agentcore:us-east-1:...)
+// so the client targets the correct region even when the frontend deploys elsewhere.
+const agentRegion = process.env.AGENT_RUNTIME_ARN?.split(':')[3] || process.env.AWS_REGION || 'us-east-1';
 const bedrockClient = new BedrockAgentCoreClient({
-  region: process.env.AWS_REGION || 'us-east-1',
+  region: agentRegion,
 });
 
 const s3Client = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
+  region: agentRegion,
 });
 
 // Middleware
