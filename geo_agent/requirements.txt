@@ -27,7 +27,7 @@ opentelemetry-proto==1.40.0
 opentelemetry-semantic-conventions==0.61b0
 
 # HTTP and networking
-aiohttp==3.13.3
+aiohttp==3.13.4
 aiohappyeyeballs==2.6.1
 aiosignal==1.4.0
 httpx==0.28.1
