@@ -42,7 +42,7 @@ websockets==15.0.1
 numpy==1.26.4
 pystac-client==0.9.0
 pystac==1.14.2
-pillow==11.3.0
+pillow==12.2.0
 
 # MCP and tools
 mcp==1.25.0
