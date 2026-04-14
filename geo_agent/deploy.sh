@@ -29,8 +29,8 @@ for var in "${required_vars[@]}"; do
 done
 
 # Set defaults for optional variables
-MODEL_ID="${MODEL_ID:-us.anthropic.claude-sonnet-4-6}"
-AWS_REGION="${AWS_REGION:-us-east-1}"
+MODEL_ID="${MODEL_ID:-eu.anthropic.claude-sonnet-4-6}"
+AWS_REGION="${AWS_REGION:-eu-central-1}"
 
 # Export region so agentcore CLI deploys to the correct region
 export AWS_REGION

@@ -38,7 +38,7 @@ export class GeospatialAgentStack extends cdk.Stack {
       s3BucketName: this.node.tryGetContext('s3BucketName') || process.env.S3_BUCKET_NAME,
 
       // AWS Region
-      awsRegion: this.node.tryGetContext('awsRegion') || process.env.AWS_REGION || 'us-east-1',
+      awsRegion: this.node.tryGetContext('awsRegion') || process.env.AWS_REGION || 'eu-central-1',
 
       // Admin user email for Cognito
       adminEmail: this.node.tryGetContext('adminEmail') || process.env.ADMIN_EMAIL,

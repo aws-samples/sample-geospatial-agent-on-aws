@@ -33,6 +33,7 @@ app = BedrockAgentCoreApp()
 
 bedrock_model = BedrockModel(
     model_id=config.MODEL_ID,
+    region_name=config.AWS_REGION,
     temperature=config.MODEL_TEMPERATURE,
 )
     
