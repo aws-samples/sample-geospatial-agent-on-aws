@@ -116,12 +116,29 @@ API_KEY_ID=$(aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs[?OutputKey=='ApiKeyId'].OutputValue" \
   --output text 2>/dev/null || echo "")
 
+MCP_URL=$(aws cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[?OutputKey=='McpEndpointUrl'].OutputValue" \
+  --output text 2>/dev/null || echo "")
+
+MCP_KEY_ID=$(aws cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[?OutputKey=='McpApiKeyId'].OutputValue" \
+  --output text 2>/dev/null || echo "")
+
 if [ -n "$API_URL" ]; then
-  echo -e "  ${CYAN}API URL:${NC}    $API_URL"
+  echo -e "  ${CYAN}API URL:${NC}        $API_URL"
 fi
 if [ -n "$API_KEY_ID" ]; then
-  echo -e "  ${CYAN}API Key ID:${NC} $API_KEY_ID"
+  echo -e "  ${CYAN}API Key ID:${NC}     $API_KEY_ID"
 fi
+if [ -n "$MCP_URL" ]; then
+  echo -e "  ${CYAN}MCP URL:${NC}        $MCP_URL"
+fi
+if [ -n "$MCP_KEY_ID" ]; then
+  echo -e "  ${CYAN}MCP Key ID:${NC}     $MCP_KEY_ID"
+fi
+echo -e "  ${CYAN}MCP Key (SSM):${NC}  /geospatial-agent/mcp-api-key"
 
 echo ""
 echo -e "${YELLOW}To retrieve your API key value, run:${NC}"
@@ -132,10 +149,22 @@ else
 fi
 
 echo ""
-echo -e "${YELLOW}Test the API:${NC}"
+echo -e "${YELLOW}To retrieve your MCP API key value, run:${NC}"
+echo -e "  aws ssm get-parameter --name /geospatial-agent/mcp-api-key --with-decryption --query 'Parameter.Value' --output text"
+
+echo ""
+echo -e "${YELLOW}Test the REST API:${NC}"
 if [ -n "$API_URL" ]; then
   echo -e "  curl -s -H 'x-api-key: <YOUR_API_KEY>' ${API_URL}capabilities | jq ."
 else
   echo -e "  curl -s -H 'x-api-key: <YOUR_API_KEY>' <API_URL>/capabilities | jq ."
+fi
+
+echo ""
+echo -e "${YELLOW}Test the MCP endpoint:${NC}"
+if [ -n "$MCP_URL" ]; then
+  echo -e "  curl -s -X POST -H 'x-api-key: <MCP_API_KEY>' -H 'Content-Type: application/json' \\"
+  echo -e "    -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":\"1\"}' \\"
+  echo -e "    ${MCP_URL} | jq ."
 fi
 echo ""

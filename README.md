@@ -29,7 +29,7 @@ An AI agent that analyzes satellite imagery for any location on Earth using natu
 
 ```
 ├── geo_agent/           # Core AI agent (Python)
-├── api-cdk/             # REST API wrapper (CDK) — optional
+├── api-cdk/             # REST API + MCP endpoint wrapper (CDK) — optional
 ├── react-ui/            # Web UI (React + Express)
 ├── frontend-cdk/        # UI infrastructure (CDK)
 ├── titiler-cdk/         # Tile server (CDK)
@@ -286,6 +286,8 @@ cd frontend-cdk && ./scripts/diagnose.sh
 
 The REST API wraps the AgentCore agent behind API Gateway + Lambda with an async job pattern. Consumers submit analysis requests and poll for results — no timeout constraints. Authentication uses API keys.
 
+This deployment also includes an **MCP (Model Context Protocol) endpoint** at `/mcp`, enabling AI agents and data mesh platforms to discover and invoke individual geospatial tools programmatically. See [MCP Endpoint](#mcp-endpoint) below.
+
 **Endpoints:**
 
 | Method | Path | Description |
@@ -293,6 +295,7 @@ The REST API wraps the AgentCore agent behind API Gateway + Lambda with an async
 | `POST` | `/analyze` | Submit an analysis job (returns immediately with a job ID) |
 | `GET` | `/jobs/{jobId}` | Poll for job status and results |
 | `GET` | `/capabilities` | List available analysis types and service metadata |
+| `POST` | `/mcp` | MCP JSON-RPC endpoint (initialize, tools/list, tools/call) |
 
 ### API Contract
 
@@ -493,6 +496,92 @@ curl -s -H "x-api-key: ${API_KEY}" ${API_URL}jobs/${JOB_ID} | jq .
 
 > **Polling:** The analysis typically takes 1–3 minutes. Poll `GET /jobs/{jobId}` every 10–15 seconds. Status transitions: `PENDING` → `RUNNING` → `COMPLETED` (or `FAILED`). Results include text analysis, area statistics, and presigned image URLs (valid for 1 hour).
 
+### MCP Endpoint
+
+The same deployment exposes an MCP (Model Context Protocol) endpoint at `POST /mcp`. This allows AI agents and data mesh platforms to discover and invoke individual geospatial tools via the standard MCP JSON-RPC protocol.
+
+**Authentication:** Uses a separate API Gateway API key (`geospatial-agent-mcp-api-key`), included in the same usage plan. The key value is automatically stored in SSM at `/geospatial-agent/mcp-api-key` during deployment.
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `search_places` | Geocode location names — returns coordinates, addresses, and place metadata |
+| `find_location_boundary` | Get precise boundary polygons from OpenStreetMap |
+| `get_rasters` | Fetch Sentinel-2 satellite imagery bands (TCI, NIR, RED, SWIR2) |
+| `run_bandmath` | Calculate spectral indices (NDVI, NDWI, NBR) with statistics |
+| `display_visual` | Display geometry or imagery on a map |
+
+#### Retrieve MCP credentials
+
+```bash
+# MCP endpoint URL
+MCP_URL=$(aws cloudformation describe-stacks \
+  --stack-name GeospatialAgentApiStack --region ${AWS_REGION} \
+  --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' --output text)
+
+# MCP API key (from SSM — written there automatically by CDK)
+MCP_API_KEY=$(aws ssm get-parameter \
+  --name /geospatial-agent/mcp-api-key \
+  --with-decryption --query 'Parameter.Value' --output text \
+  --region ${AWS_REGION})
+
+echo "MCP URL: $MCP_URL"
+```
+
+#### Test MCP endpoint
+
+```bash
+# Initialize (MCP handshake)
+curl -s -X POST -H "x-api-key: ${MCP_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":"1"}' \
+  ${MCP_URL} | jq .
+
+# List available tools
+curl -s -X POST -H "x-api-key: ${MCP_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":"2"}' \
+  ${MCP_URL} | jq .
+
+# Call a tool (search for a location)
+curl -s -X POST -H "x-api-key: ${MCP_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"search_places","arguments":{"query":"Central Park, New York"}},"id":"3"}' \
+  ${MCP_URL} | jq .
+```
+
+#### Register with a data mesh
+
+To register this MCP endpoint as a supplier in the ADSE Data Mesh:
+
+```bash
+# Read the MCP API key from SSM
+MCP_API_KEY=$(aws ssm get-parameter \
+  --name /geospatial-agent/mcp-api-key \
+  --with-decryption --query 'Parameter.Value' --output text \
+  --region ${AWS_REGION})
+
+# Register as an MCP supplier product
+curl -s -X POST -H "x-api-key: ${SUPPLIER_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sentinel_2_geospatial_tools",
+    "description": "Sentinel-2 satellite imagery analysis tools — search places, get imagery, calculate spectral indices (NDVI/NDWI/NBR), and visualize results",
+    "classificationLevel": "UNCLASSIFIED",
+    "releasability": "UNRESTRICTED",
+    "mettcCategory": ["terrain"],
+    "militaryDomain": "geospatial",
+    "dataType": "mcp",
+    "mcpEndpointUrl": "'${MCP_URL}'",
+    "mcpAuthType": "api_key",
+    "mcpApiKey": "'${MCP_API_KEY}'"
+  }' \
+  ${MESH_API_URL}/suppliers/products | jq .
+```
+
+The mesh will store the API key in its own SSM, discover the available tools via `tools/list`, and make them available to subscribed consumers through the mesh's MCP proxy with full governance (DCS, audit, subscription checks).
+
 ```bash
 cd ..
 ```
@@ -570,6 +659,7 @@ The agent has access to these tools for geospatial analysis:
 - **Frontend CDK**: See `frontend-cdk/README.md` for deployment and authentication
 - **TiTiler**: See `titiler-cdk/README.md` for tile server deployment
 - **REST API**: See `api-cdk/` for the optional API Gateway wrapper (Part 4)
+- **MCP Endpoint**: Included in Part 4 — see [MCP Endpoint](#mcp-endpoint) for tool discovery and invocation via MCP protocol
 - **Use Cases**: See `use-cases/README.md` for creating custom scenarios
 
 ## Authors
