@@ -23,7 +23,7 @@
     "react-markdown": "^9.0.1",
     "react-router-dom": "^7.9.6",
     "remark-gfm": "^4.0.1",
-    "uuid": "^9.0.1"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
