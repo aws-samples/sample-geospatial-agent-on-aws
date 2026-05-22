@@ -78,4 +78,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 # Copy project files
 COPY . .
 
-CMD ["opentelemetry-instrument", "python", "-m", "geospatial_agent_on_aws"]
+CMD if [ "$DISABLE_ADOT_OBSERVABILITY" = "true" ]; then exec python -m geospatial_agent_on_aws; else exec opentelemetry-instrument python -m geospatial_agent_on_aws; fi
