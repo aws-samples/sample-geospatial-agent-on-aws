@@ -47,6 +47,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs \
     pandas=2.3.3 \
     rasterio=1.5.0 \
     rasterstats=0.20.0 \
+    scipy \
     geopy=2.4.1 \
     osmnx=2.0.7 \
     proj=9.7.1 \
@@ -63,6 +64,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 ENV AWS_REGION=us-east-1
 ENV AWS_DEFAULT_REGION=us-east-1
 ENV DOCKER_CONTAINER=1
+
+# Bound GDAL memory. By default GDAL sizes its block cache to ~5% of the HOST's
+# RAM (not the container's cgroup limit), which can balloon and trigger an
+# out-of-memory kill during raster reads/writes (especially with parallel tiers).
+# Pin the cache to 256 MB and cap GDAL's worker threads so peak memory is bounded.
+ENV GDAL_CACHEMAX=256
+ENV GDAL_NUM_THREADS=2
 
 # Create non-root user
 RUN useradd -m -u 1000 bedrock_agentcore

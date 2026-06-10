@@ -147,8 +147,7 @@ function parseJsonToolCalls(text: string): ToolCall[] {
             try {
               params = JSON.parse(toolObj.input);
             } catch (e) {
-              console.warn(`⚠️ Failed to parse input for ${toolObj.name}:`, toolObj.input);
-              // Fallback: try to extract key fields manually
+              // Input field may be incomplete during streaming - silently skip
               const s3Match = toolObj.input.match(/s3_url["\s:]+([^"]+)/);
               const titleMatch = toolObj.input.match(/title["\s:]+([^"]+)/);
               if (s3Match) params = { ...params, s3_url: s3Match[1] };
@@ -164,7 +163,11 @@ function parseJsonToolCalls(text: string): ToolCall[] {
           }
         }
       } catch (e) {
-        console.warn(`⚠️ Failed to parse JSON at position ${start}:`, jsonStr.substring(0, 100), e);
+        // Expected during streaming - partial JSON objects are common
+        // Only log at debug level to avoid console noise
+        if (typeof e === 'object' && e !== null && 'message' in e) {
+          // Silently skip incomplete streaming chunks - these will be parsed once complete
+        }
       }
 
       pos = end;

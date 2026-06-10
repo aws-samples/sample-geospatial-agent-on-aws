@@ -518,6 +518,12 @@ export class GeospatialAgentStack extends cdk.Stack {
         origin: new origins.LoadBalancerV2Origin(fargateService.loadBalancer, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           httpPort: 80,
+          // Raise origin response timeout to 60s (max without a quota increase).
+          // The agent can take >30s to produce its first chunk on a cold AgentCore
+          // session (fresh microVM booting heavy geo libraries). Combined with the
+          // backend's 10s SSE keepalive, this prevents CloudFront 504s on long scans.
+          readTimeout: cdk.Duration.seconds(60),
+          keepaliveTimeout: cdk.Duration.seconds(60),
           readTimeout: cdk.Duration.seconds(60),
           customHeaders: {
             [customHeaderName]: customHeaderValue,

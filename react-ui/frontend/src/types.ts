@@ -30,6 +30,7 @@ export interface StreamEvent {
   type: 'chunk' | 'done' | 'error';
   content?: string;
   message?: string;
+  code?: string;
 }
 
 export interface RasterData {
