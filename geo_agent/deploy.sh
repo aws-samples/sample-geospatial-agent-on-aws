@@ -40,6 +40,7 @@ echo "Configuration:"
 echo "   S3 Bucket: ${S3_BUCKET_NAME}"
 echo "   Model: ${MODEL_ID}"
 echo "   Region: ${AWS_REGION}"
+echo "   LGND Embeddings: ${LGND_EMBEDDINGS_ENABLED:-false}"
 echo ""
 
 # Configure agent
@@ -65,6 +66,7 @@ agentcore launch \
     --env "S3_BUCKET_NAME=${S3_BUCKET_NAME}" \
     --env "MODEL_ID=${MODEL_ID}" \
     --env "BEDROCK_MODEL_ID=${MODEL_ID}" \
+    --env "LGND_EMBEDDINGS_ENABLED=${LGND_EMBEDDINGS_ENABLED:-false}" \
     --auto-update-on-conflict
 
 echo ""

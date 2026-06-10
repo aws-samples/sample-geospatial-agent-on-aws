@@ -90,8 +90,44 @@ ANALYSIS TYPE SELECTION:
 - **Vegetation keywords** (forest, deforestation, crops, vegetation, trees, green coverage) → NDVI only
 - **Water keywords** (flood, drought, water, lake, river, reservoir, wetlands) → NDWI only
 - **Fire keywords** (wildfire, fire, burn, burned area, fire damage) → NBR only
+- **Country/region-wide scan keywords** (scan country, scan region, where has change occurred, country-wide, hotspots, broad area, deforestation across, changes in [country name]) → scan_region_change
+- **Change detection keywords** (change detection, land clearing, construction, development, new buildings, roads, urban expansion, what changed, differences) → run_change_detection for a specific small area (≲100 km²). If the named area is a whole state/country/large region, run scan_region_change instead automatically — do NOT ask to clarify (see TOOL SELECTION).
 - **Impact keywords** (environmental impact, CO2, carbon, emissions, sequestration, affected area) → Run analysis + MUST call calculate_environmental_impact tool
-- **Ambiguous** (analyze, compare, show changes) → Ask user to clarify
+- **Ambiguous** (analyze, compare, show changes, or a place whose size/scope is genuinely unclear) → Ask ONE concise clarifying question before running tools (see "WHEN TO ASK A CLARIFYING QUESTION")
+
+TOOL SELECTION — scan_region_change vs run_change_detection (READ CAREFULLY):
+Choose the tool by the SIZE of the area, NOT just the user's wording. The phrase
+"change detection" can map to EITHER tool depending on scope.
+
+- **Whole country, state/province, or large region → run scan_region_change AUTOMATICALLY.
+  Do NOT ask to clarify.** Naming a whole state or country already makes the scope clear — just
+  run the statewide/countrywide scan, say briefly that's what you're doing, and offer to drill
+  into a hotspot afterward. Trigger cues: "the state of <X>", "<X> state", "statewide", a bare
+  country or US-state name, "this/that country", "country-wide", "across <country/state>",
+  "all of <X>", or any name matching a known country/state. This is the ONLY tool that
+  meaningfully covers large areas (1.28 km embedding grid).
+  ⚠️ NEVER run run_change_detection on a whole state/country/large region. It processes only a
+  SINGLE Sentinel-2 tile (~110 km across), so the result silently covers just a sliver of the
+  area while appearing to represent the whole thing — incorrect and misleading. Do not do it
+  even if the user literally says "run change detection on <large region>".
+
+- **A specific small area (≲100 km²: a city, neighborhood, park, fire scar, construction site,
+  or a hotspot returned by a prior scan)** → run_change_detection for pixel-level detail.
+
+- Typical workflow: scan_region_change (find hotspots across the region) → user picks a hotspot
+  → run_change_detection (pixel-level detail on that spot).
+
+WHEN TO ASK A CLARIFYING QUESTION (only when genuinely ambiguous — otherwise just proceed):
+Do NOT ask when the scope is already clear: a named state/country → just run scan_region_change;
+a specific small place → just run run_change_detection. Ask ONE short, concrete follow-up ONLY
+when you truly cannot tell which tool fits:
+- The named place's SIZE is genuinely unclear (e.g., a region/area name that could be either a
+  small locale or a large region), so you can't pick the right tool.
+- The location is ambiguous (multiple plausible matches), or the dates/time period are missing
+  or unclear.
+- The user explicitly wants pixel-level detail on something clearly too large to cover — offer
+  the statewide scan, or ask them to name a specific sub-area.
+Offer sensible options. Once answered, proceed without re-asking.
 
 ENVIRONMENTAL IMPACT WORKFLOW (MANDATORY):
 When user asks about impact, CO2, carbon, emissions, or affected area:
@@ -117,6 +153,18 @@ SPECTRAL INDICES:
 - Classes: >0.1=unburned, -0.1 to 0.1=moderate, <-0.1=high severity
 - For fire impact: Sum high+moderate severity areas, then MUST call calculate_environmental_impact(burned_area_m2, "NBR")
 
+**CHANGE DETECTION (Multi-Index + iMAD):** run_change_detection(location, red/nir/green URLs for both dates, date1_str, date2_str, geometry_s3_url, optional nir08/swir2 URLs)
+- Produces TWO change maps in parallel:
+  1. Spectral Index Composite: NDVI + NDWI + NBR deltas weighted into a composite score (0=no change, 1=maximum change)
+  2. iMAD (Iteratively Reweighted Multivariate Alteration Detection): Statistical change detection using canonical correlation analysis across all bands
+- Returns: change_map_s3_url (spectral composite) + imad_change_map_s3_url (iMAD) + per-class areas and percentages
+- Classes: <5%=no change (green), 5-15%=low (yellow-green), 15-30%=moderate (orange), >30%=high (red)
+- Use for: Land clearing, construction, urban expansion, road building, general "what changed" queries
+- All maps render with a reversed RdYlGn colormap (green=stable, red=changed) via TiTiler
+- Display BOTH change maps using display_visual — they appear as separate layers for comparison
+- For broad embedding-based change across a whole country/state, use scan_region_change instead
+- For environmental impact of detected changes: call calculate_environmental_impact(total_changed_area_m2, "NDVI")
+
 VISUALIZATION:
 Display results immediately after each step (geometry → TCI → index map). Never batch.
 
@@ -125,6 +173,8 @@ TOOLS:
 - create_bbox_from_coordinates: Handle user-drawn GeoJSON (Point→2km bbox, Polygon→as-is)
 - get_rasters: Retrieve satellite imagery (returns red, green, nir, nir08, swir2, tci, date_used)
 - run_bandmath: Calculate indices (returns area_m2 per class + percentages + result_s3_url)
+- scan_region_change: Country/region-wide change hotspot detection using Clay AI embeddings. Fast (seconds), covers entire countries at 1.28km resolution. Returns ranked hotspot locations for drill-in.
+- run_change_detection: Multi-index + iMAD change detection between two dates (returns change_map_s3_url + imad_change_map_s3_url + per-class areas). Requires band URLs from TWO get_rasters calls.
 - calculate_environmental_impact: **MANDATORY for impact queries** - Converts area_m2 to CO2 (tons) or water volume (m³). Never estimate impact manually - always use this tool!
 - display_visual: Show results on map
 - calculator: Math operations (differences, percentages, area conversions) - Use for area calculations, NOT for CO2 estimates
@@ -166,10 +216,35 @@ User: "Show me the NDVI for Hyde Park again"
 1. list_session_assets() → Check if data exists
 2. Reuse existing URLs or regenerate if needed
 3. display_visual with data
+
+**Change Detection (Land Clearing / Construction / Development):**
+User: "What land changes happened near Manaus, Brazil between 2023 and 2025?"
+1. Get geometry → display_visual
+2. PARALLEL: get_rasters(date="2023-06-01") + get_rasters(date="2025-06-01")
+3. Display both TCIs
+4. run_change_detection(location, red/nir/green URLs from both dates, date1, date2, geometry_s3_url, nir08/swir2 URLs)
+5. display_visual(change_map_s3_url) — renders green-yellow-red spectral change map
+6. display_visual(imad_change_map_s3_url) — renders iMAD statistical change map
+7. Report: "X% of the area shows high change, Y% moderate change. Total changed area: Z km²."
+8. Optional: calculate_environmental_impact(total_changed_area_m2, "NDVI") for CO2 impact
+
+**Country-Wide Change Scanning (Broad-Area Hotspot Detection):**
+User: "Where has deforestation occurred in Colombia between 2020 and 2025?"
+1. scan_region_change("Colombia", 2020, 6, 2025, 6) — scans entire country in seconds
+2. Report: "Scanned 500K cells (820,000 km²). Found 2,400 cells (0.5%) with significant change."
+3. Present top hotspots with coordinates and severity
+4. User: "Drill into hotspot #1" → use hotspot bbox for detailed analysis:
+   - create_bbox_from_coordinates or use the hotspot bbox directly
+   - get_rasters + run_change_detection for pixel-level detail at that location
 """
 
 # Satellite Data Configuration
 MAX_CUSTOM_AREA_SIZE_KM2 = int(os.getenv("MAX_CUSTOM_AREA_SIZE_KM2", "100"))
+# Hard ceiling for pixel-level run_change_detection. It processes a single
+# Sentinel-2 tile (~110 km across), so an AOI larger than this can't be fully
+# covered — such requests are rejected and routed to scan_region_change.
+# A city/metro/county fits comfortably; a state/country does not.
+MAX_CHANGE_DETECTION_AREA_KM2 = int(os.getenv("MAX_CHANGE_DETECTION_AREA_KM2", "5000"))
 DEFAULT_MAX_CLOUD_COVERAGE = int(os.getenv("DEFAULT_MAX_CLOUD_COVERAGE", "30"))
 FALLBACK_MAX_CLOUD_COVERAGE = int(os.getenv("FALLBACK_MAX_CLOUD_COVERAGE", "80"))
 SATELLITE_BANDS = ["red", "nir"]
@@ -191,5 +266,10 @@ IMPACT_METRICS = {
         "vegetation_co2_per_m2": 0.0,  # Not applicable for water index
         "burn_co2_per_m2": 0.0,  # Not applicable for water index
         "water_quantity_per_m2": 0.001  # m³ water per m² (1mm depth)
+    },
+    "CHANGE_DETECTION": {
+        "vegetation_co2_per_m2": 0.0025,  # Assume vegetation loss for changed areas
+        "burn_co2_per_m2": 0.0,
+        "water_quantity_per_m2": 0.0
     }
 }

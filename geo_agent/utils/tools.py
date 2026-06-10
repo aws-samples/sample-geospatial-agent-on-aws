@@ -4,10 +4,13 @@ Strands tool definitions for geospatial analysis
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime
 from io import BytesIO
 import boto3
 import math
+import numpy as np
+import rasterio
 
 from strands import tool
 from strands_tools import calculator as calculator_tool
@@ -19,6 +22,29 @@ from .aws_utils import download_from_s3, download_geometry_from_s3, list_files_i
 import config
 
 logger = logging.getLogger(__name__)
+
+
+def _log_mem(tag: str) -> None:
+    """Log current and peak process RSS so crashes leave a memory trail.
+
+    Uses only the stdlib: peak RSS from resource.getrusage (KB on Linux) and
+    current RSS from /proc/self/status. Best-effort — never raises.
+    """
+    try:
+        import resource
+        peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+        cur_mb = -1.0
+        try:
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        cur_mb = int(line.split()[1]) / 1024.0
+                        break
+        except Exception:
+            pass
+        logger.info("🧠 MEM[%s] current=%.0fMB peak=%.0fMB", tag, cur_mb, peak_mb)
+    except Exception:
+        pass
 
 #####################################
 ### UTILITY TOOLS
@@ -504,12 +530,12 @@ async def get_rasters(location: str, geometry_s3_url: str = None, current_date_s
     Returns: JSON with tci_s3_url, red_s3_url, green_s3_url, nir_s3_url, nir08_s3_url, swir2_s3_url, date_used, cloud_pct
 
     Use date_used in subsequent analysis calls. For comparisons, call this twice with different dates that bracket the event."""
-    #try:
     if not current_date_str:
         current_date_str = datetime.today().strftime("%Y-%m-%d")
     
     status_msg = f"🔍 STEP 1: Searching for satellite images 📅 Date: {current_date_str}\n☁️ Max cloud: {max_cloud}%"
     logger.info(status_msg)
+    _log_mem("get_rasters:start")
 
     if geometry_s3_url:
         # Download geometry from S3 (GeoJSON format)
@@ -521,14 +547,14 @@ async def get_rasters(location: str, geometry_s3_url: str = None, current_date_s
         geocode_result = json.loads(geocode_result) #cast as a json
         aoi_gdf = download_geometry_from_s3(geocode_result["geometry_s3_url"])
         
-    images = get_filtered_images(aoi_gdf, bands=["red", "green", "nir", "nir08", "swir2"], max_cloud=max_cloud, current_date_str=current_date_str, location=location)
+    images = get_filtered_images(aoi_gdf, bands=["red", "green", "blue", "nir", "nir08", "swir2"], max_cloud=max_cloud, current_date_str=current_date_str, location=location)
     print(images)
 
     logger.info(f"✅ STEP 1 RESULT: Found {len(images)} images")
 
     if not images:
         logger.info("⚠️ STEP 1 RETRY: No images found, trying with higher cloud coverage (80%)")
-        images = get_filtered_images(aoi_gdf, bands=["red", "green", "nir", "nir08", "swir2"], max_cloud=80, current_date_str=current_date_str, location=location)
+        images = get_filtered_images(aoi_gdf, bands=["red", "green", "blue", "nir", "nir08", "swir2"], max_cloud=80, current_date_str=current_date_str, location=location)
         logger.info(f"✅ STEP 1 RETRY RESULT: Found {len(images)} images")
         
     if not images:
@@ -547,6 +573,7 @@ async def get_rasters(location: str, geometry_s3_url: str = None, current_date_s
         "tci_s3_url": result.get('tci_s3_url', ''),
         "red_s3_url": result.get('red_s3_url', ''),
         "green_s3_url": result.get('green_s3_url', ''),
+        "blue_s3_url": result.get('blue_s3_url', ''),
         "nir_s3_url": result.get('nir_s3_url', ''),
         "nir08_s3_url": result.get('nir08_s3_url', ''),
         "swir2_s3_url": result.get('swir2_s3_url', ''),
@@ -555,13 +582,8 @@ async def get_rasters(location: str, geometry_s3_url: str = None, current_date_s
         "coverage_pct": result.get('coverage_pct', '')
     })
     
+    _log_mem("get_rasters:end")
     return out
-    
-    # except Exception as e:
-    #     error_msg = f"❌ STEP 1 ERROR: {str(e)}"
-    #     logger.error(error_msg)
-    #     print(error_msg)
-    #     return error_msg
 
 
 #####################################
@@ -753,13 +775,16 @@ async def calculate_environmental_impact(affected_area_m2: float, index_type: st
         }
         
         # Add only relevant metrics based on index type
-        if index_type == "NDVI":
+        if index_type == "NDVI" or index_type == "CHANGE_DETECTION":
             vegetation_co2_kg = affected_area_m2 * metrics["vegetation_co2_per_m2"]
             vegetation_co2_tons = vegetation_co2_kg / 1000
             
             result["vegetation_co2_kg"] = round(vegetation_co2_kg, 2)
             result["vegetation_co2_tons"] = round(vegetation_co2_tons, 2)
-            result["interpretation"] = f"This vegetation area sequesters approximately {vegetation_co2_tons:.2f} metric tons of CO2 per year"
+            if index_type == "CHANGE_DETECTION":
+                result["interpretation"] = f"The detected land change area of {affected_area_km2:.2f} km² represents approximately {vegetation_co2_tons:.2f} metric tons of potential CO2 sequestration capacity affected per year"
+            else:
+                result["interpretation"] = f"This vegetation area sequesters approximately {vegetation_co2_tons:.2f} metric tons of CO2 per year"
             
             logger.info(f"   🌱 Vegetation CO2 sequestration: {vegetation_co2_tons:.2f} metric tons/year")
             
@@ -795,3 +820,598 @@ async def calculate_environmental_impact(affected_area_m2: float, index_type: st
         error_msg = f"Unexpected error in impact calculation: {str(e)}"
         logger.error(f"❌ IMPACT CALCULATION ERROR: {error_msg}")
         return json.dumps({"error": error_msg})
+
+
+#####################################
+### CHANGE DETECTION TOOLS
+#####################################
+
+@tool
+async def scan_region_change(
+    region: str,
+    year1: int,
+    month1: int,
+    year2: int,
+    month2: int,
+    top_n: int = 20,
+) -> str:
+    """Scan an entire country or large region for land surface change hotspots using Clay AI embeddings.
+
+    This is a FAST broad-area scan (seconds to minutes) that identifies WHERE change happened
+    at 1.28km resolution across an entire country. Use the returned hotspot bboxes to drill
+    into specific areas with run_change_detection for pixel-level detail.
+
+    IMPORTANT: Very large countries (USA, Brazil, China, Canada, India) may take too long.
+    For these, suggest scanning a specific state/region instead. Medium countries (Colombia,
+    Peru, Costa Rica, etc.) work well.
+
+    Args:
+        region: Country name (e.g. "Colombia", "Brazil", "Costa Rica") or "custom" with bbox
+        year1: Earlier year (e.g. 2020)
+        month1: Earlier month (1-12)
+        year2: Later year (e.g. 2025)
+        month2: Later month (1-12)
+        top_n: Number of top hotspots to return (default 20)
+
+    Returns: JSON with:
+        - summary: total cells scanned, area covered, % changed, timing
+        - hotspots: Top N areas ranked by change severity, each with center_lat/lon and bbox for drill-in
+        - hotspot_geometry_s3_url: GeoJSON of hotspot locations for map display
+
+    Workflow:
+    1. User asks: "Where has deforestation occurred in Colombia between 2020 and 2025?"
+    2. Call scan_region_change("Colombia", 2020, 6, 2025, 6)
+    3. display_visual(hotspot_geometry_s3_url) to show hotspots on map
+    4. Present hotspot results with locations and severity
+    5. User selects a hotspot → use its bbox with get_rasters + run_change_detection for detailed analysis
+
+    For very large countries (USA, Brazil, China, India, Canada, Australia):
+    - Suggest scanning a sub-region: "Colorado", "Rondônia State", "New South Wales"
+    - Or use a custom bbox for a specific area of interest
+
+    Coverage: Global Sentinel-2 archive, Jan 2017 - April 2026, monthly resolution.
+    Resolution: 1.28km grid cells (each cell is one Clay v1.5 embedding).
+    Method: Cosine similarity between embedding vectors — semantically aware, ignores seasonal noise.
+    """
+    from .lgnd_embeddings import scan_region_change as _scan_region, COUNTRY_BBOXES
+
+    try:
+        # Resolve region to bbox
+        region_lower = region.lower().strip()
+        if region_lower in COUNTRY_BBOXES:
+            bbox = COUNTRY_BBOXES[region_lower]
+            logger.info(f"🌍 REGION SCAN: {region} ({bbox}), {year1}-{month1:02d} → {year2}-{month2:02d}")
+        else:
+            # Try to find a partial match
+            matches = [k for k in COUNTRY_BBOXES if region_lower in k or k in region_lower]
+            if matches:
+                bbox = COUNTRY_BBOXES[matches[0]]
+                logger.info(f"🌍 REGION SCAN: {region} (matched '{matches[0]}'), {year1}-{month1:02d} → {year2}-{month2:02d}")
+            else:
+                return json.dumps({
+                    "error": f"Unknown region: '{region}'. Supported countries: {', '.join(sorted(COUNTRY_BBOXES.keys())[:20])}... Use run_change_detection with a specific bbox for custom areas."
+                })
+
+        # Check if region is very large (>20 geohashes would be excessive)
+        from .lgnd_embeddings import _get_geohashes_for_bbox
+        scan_geohashes = _get_geohashes_for_bbox(bbox[0], bbox[1], bbox[2], bbox[3])
+        if len(scan_geohashes) > 20:
+            return json.dumps({
+                "error": f"Region '{region}' spans {len(scan_geohashes)} geohash partitions (max 20). "
+                         f"Please scan a smaller sub-region."
+            })
+
+        result = _scan_region(
+            bbox=bbox,
+            year1=year1,
+            month1=month1,
+            year2=year2,
+            month2=month2,
+            top_n=top_n,
+            min_change_score=0.15,
+        )
+
+        if "error" in result:
+            return json.dumps(result)
+
+        # Build GeoJSON for map display: ALL changed cells as a density layer,
+        # colored by change_score, with the top-N hotspots tagged (tier="top",
+        # plus rank) so the frontend can highlight them distinctly.
+        all_cells = result.get("_all_cells", [])
+        change_geojson = {
+            "type": "FeatureCollection",
+            "features": []
+        }
+        for c in all_cells:
+            b = c.get("bbox")
+            if not b:
+                continue
+            rank = c.get("rank")
+            feature = {
+                "type": "Feature",
+                "properties": {
+                    "change_score": c.get("change_score", 0),
+                    "rank": rank,
+                    "tier": "top" if rank else "change",
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [b["west"], b["south"]],
+                        [b["east"], b["south"]],
+                        [b["east"], b["north"]],
+                        [b["west"], b["north"]],
+                        [b["west"], b["south"]],
+                    ]]
+                }
+            }
+            change_geojson["features"].append(feature)
+
+        # Fallback: if for some reason _all_cells is empty, fall back to the
+        # top-N hotspots so the map still shows something.
+        if not change_geojson["features"]:
+            for h in result.get("hotspots", []):
+                if h.get("bbox"):
+                    b = h["bbox"]
+                    change_geojson["features"].append({
+                        "type": "Feature",
+                        "properties": {
+                            "change_score": h["change_score"],
+                            "rank": h["rank"],
+                            "tier": "top",
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [b["west"], b["south"]],
+                                [b["east"], b["south"]],
+                                [b["east"], b["north"]],
+                                [b["west"], b["north"]],
+                                [b["west"], b["south"]],
+                            ]]
+                        }
+                    })
+
+        # Save change GeoJSON to S3
+        s3_client = boto3.client('s3')
+        session_id = os.environ.get('AGENT_SESSION_ID', config.DEFAULT_SESSION_ID)
+        bucket_name = config.S3_BUCKET_NAME
+        clean_region = region.replace(" ", "_").replace(",", "").lower()
+        s3_key = f"session_data/{session_id}/geometries/scan_hotspots_{clean_region}_{year1}{month1:02d}_to_{year2}{month2:02d}.geojson"
+
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=s3_key,
+            Body=json.dumps(change_geojson).encode('utf-8'),
+            ContentType='application/geo+json'
+        )
+        hotspot_s3_url = f"s3://{bucket_name}/{s3_key}"
+
+        # Strip the internal full-cell list so it does not bloat the LLM context;
+        # the model still gets the ranked top-N hotspots for narration.
+        cells_shown = len(change_geojson["features"])
+        result.pop("_all_cells", None)
+
+        # Enhance result with region metadata
+        result["region"] = region
+        result["hotspot_geometry_s3_url"] = hotspot_s3_url
+        result["cells_displayed"] = cells_shown
+        result["method"] = "Clay v1.5 foundation model embeddings (LGND/Source Cooperative)"
+        result["resolution"] = "1.28km grid cells"
+        result["interpretation"] = (
+            f"Scanned {result['summary']['total_cells_scanned']:,} cells "
+            f"({result['summary']['area_scanned_km2']:,.0f} km²) using peak-season "
+            f"{result['summary'].get('month_name', '')} imagery. "
+            f"{result['summary']['cells_with_change']:,} cells ({result['summary']['change_percentage']:.1f}%) "
+            f"show significant change. The map layer (hotspot_geometry_s3_url) shows ALL "
+            f"{cells_shown:,} changed cells colored by change score, with the top "
+            f"{len(result.get('hotspots', []))} hotspots highlighted. "
+            f"Display hotspot_geometry_s3_url on the map, then drill into a specific hotspot "
+            f"with run_change_detection."
+        )
+        # Include drill-in recommendation prominently
+        if "drill_in_recommendation" in result:
+            result["IMPORTANT_for_drill_in"] = result["drill_in_recommendation"]
+
+        logger.info(f"✅ REGION SCAN COMPLETE: {result['summary']['total_cells_scanned']:,} cells, "
+                    f"{result['summary']['cells_with_change']} changed, "
+                    f"{result['summary']['total_time_s']:.1f}s")
+
+        return json.dumps(result)
+
+    except Exception as e:
+        error_msg = f"❌ REGION SCAN ERROR: {type(e).__name__}: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return json.dumps({"error": error_msg})
+
+
+@tool
+async def run_change_detection(
+    location: str,
+    red_s3_url_date1: str,
+    nir_s3_url_date1: str,
+    green_s3_url_date1: str,
+    red_s3_url_date2: str,
+    nir_s3_url_date2: str,
+    green_s3_url_date2: str,
+    date1_str: str,
+    date2_str: str,
+    geometry_s3_url: str = None,
+    nir08_s3_url_date1: str = None,
+    swir2_s3_url_date1: str = None,
+    nir08_s3_url_date2: str = None,
+    swir2_s3_url_date2: str = None,
+    blue_s3_url_date1: str = None,
+    blue_s3_url_date2: str = None,
+) -> str:
+    """Detect land surface changes between two dates using multi-index spectral analysis.
+    Produces two change maps: a spectral index composite and iMAD. (Embedding-based
+    change is handled separately by the scan_region_change tool.)
+
+    REQUIRES calling get_rasters TWICE first (once per date) to obtain band URLs.
+
+    Args:
+        location: Place name (for filenames)
+        red_s3_url_date1: Red band S3 URL for earlier date
+        nir_s3_url_date1: NIR band S3 URL for earlier date
+        green_s3_url_date1: Green band S3 URL for earlier date
+        red_s3_url_date2: Red band S3 URL for later date
+        nir_s3_url_date2: NIR band S3 URL for later date
+        green_s3_url_date2: Green band S3 URL for later date
+        date1_str: Earlier date (YYYY-MM-DD) from get_rasters date_used
+        date2_str: Later date (YYYY-MM-DD) from get_rasters date_used
+        geometry_s3_url: Geometry for clipping (from find_location_boundary or create_bbox_from_coordinates)
+        nir08_s3_url_date1: Optional NIR08 (20m) for date 1 — enables NBR in composite
+        swir2_s3_url_date1: Optional SWIR2 (20m) for date 1 — enables NBR in composite
+        nir08_s3_url_date2: Optional NIR08 (20m) for date 2 — enables NBR in composite
+        swir2_s3_url_date2: Optional SWIR2 (20m) for date 2 — enables NBR in composite
+        blue_s3_url_date1: Optional Blue band (10m) for date 1 — enables BSI (Bare Soil Index) for construction detection
+        blue_s3_url_date2: Optional Blue band (10m) for date 2 — enables BSI
+
+    Returns: JSON with change statistics (per-class areas and percentages), change_map_s3_url for visualization
+
+    The output raster uses values 0-1 (composite change score). Display with display_visual — the frontend
+    renders it with a reversed RdYlGn colormap (green=no change, yellow=moderate, red=high change).
+
+    Workflow:
+    1. get_rasters(date1) + get_rasters(date2) in PARALLEL
+    2. run_change_detection(all band URLs from both dates)
+    3. display_visual(geometry) then display_visual(change_map_s3_url)
+    """
+    import shutil
+    from .raster_utils import clip_raster_v2
+    from .aws_utils import download_geometry_from_s3
+    from .change_detection_utils import (
+        compute_index_delta,
+        compute_bsi_delta,
+        compute_composite_change_score,
+        compute_change_statistics,
+        imad_change_score,
+    )
+
+    temp_dir = tempfile.mkdtemp(prefix='change_detect_')
+
+    try:
+        s3_client = boto3.client('s3')
+        session_id = os.environ.get('AGENT_SESSION_ID', config.DEFAULT_SESSION_ID)
+        bucket_name = config.S3_BUCKET_NAME
+
+        logger.info(f"🔄 CHANGE DETECTION: {location}")
+        logger.info(f"   Date 1: {date1_str}, Date 2: {date2_str}")
+        _log_mem("change_detection:start")
+
+        # Guard rail: run_change_detection is pixel-level and only processes a
+        # single Sentinel-2 tile (~110 km across). If the AOI is larger than one
+        # tile can cover, the result would silently represent just a sliver of the
+        # requested area while appearing to cover all of it. Reject oversized AOIs
+        # up front (before any downloads) and route the caller to scan_region_change.
+        if geometry_s3_url:
+            try:
+                guard_gdf = download_geometry_from_s3(geometry_s3_url)
+                area_km2 = float(guard_gdf.to_crs("EPSG:6933").geometry.area.sum()) / 1_000_000
+                if area_km2 > config.MAX_CHANGE_DETECTION_AREA_KM2:
+                    logger.warning("⚠️ CHANGE DETECTION: AOI too large (%.0f km² > %d km²) — routing to scan_region_change",
+                                   area_km2, config.MAX_CHANGE_DETECTION_AREA_KM2)
+                    return json.dumps({
+                        "error": (
+                            f"The area for '{location}' is ~{area_km2:,.0f} km², which is too large for "
+                            f"pixel-level change detection (limit {config.MAX_CHANGE_DETECTION_AREA_KM2:,} km²). "
+                            f"run_change_detection processes a single Sentinel-2 tile (~110 km across), so it "
+                            f"would only cover a small part of this area and misrepresent the result."
+                        ),
+                        "area_km2": round(area_km2, 1),
+                        "max_area_km2": config.MAX_CHANGE_DETECTION_AREA_KM2,
+                        "recommended_tool": "scan_region_change",
+                        "recommendation": (
+                            "Use scan_region_change for a broad hotspot scan of the whole region, then drill "
+                            "into a specific hotspot (under ~100 km²) with run_change_detection for detail."
+                        ),
+                    })
+            except Exception as guard_err:
+                # If the area check itself fails, don't block the analysis — log and continue.
+                logger.warning("Change detection area guard skipped (%s): %s",
+                               type(guard_err).__name__, guard_err)
+
+        # --- Helper to download a band from S3 ---
+        def download_band(s3_url, label):
+            b, k = s3_url.replace('s3://', '').split('/', 1)
+            local = f"{temp_dir}/{label}.tif"
+            s3_client.download_file(b, k, local)
+            return local
+
+        # --- Download 10m bands for both dates ---
+        red1_path = download_band(red_s3_url_date1, "red_d1")
+        nir1_path = download_band(nir_s3_url_date1, "nir_d1")
+        green1_path = download_band(green_s3_url_date1, "green_d1")
+        red2_path = download_band(red_s3_url_date2, "red_d2")
+        nir2_path = download_band(nir_s3_url_date2, "nir_d2")
+        green2_path = download_band(green_s3_url_date2, "green_d2")
+
+        # --- Read arrays ---
+        with rasterio.open(red1_path) as src:
+            red1 = src.read(1)
+            profile = src.profile.copy()
+            transform = src.transform
+
+        with rasterio.open(nir1_path) as src:
+            nir1 = src.read(1)
+        with rasterio.open(green1_path) as src:
+            green1 = src.read(1)
+        with rasterio.open(red2_path) as src:
+            red2 = src.read(1)
+        with rasterio.open(nir2_path) as src:
+            nir2 = src.read(1)
+        with rasterio.open(green2_path) as src:
+            green2 = src.read(1)
+
+        # --- Download optional 20m bands ---
+        nir08_1 = nir08_2 = swir2_1 = swir2_2 = None
+        if all([nir08_s3_url_date1, swir2_s3_url_date1, nir08_s3_url_date2, swir2_s3_url_date2]):
+            nir08_1_path = download_band(nir08_s3_url_date1, "nir08_d1")
+            swir2_1_path = download_band(swir2_s3_url_date1, "swir2_d1")
+            nir08_2_path = download_band(nir08_s3_url_date2, "nir08_d2")
+            swir2_2_path = download_band(swir2_s3_url_date2, "swir2_d2")
+
+            with rasterio.open(nir08_1_path) as src:
+                nir08_1 = src.read(1)
+            with rasterio.open(swir2_1_path) as src:
+                swir2_1 = src.read(1)
+            with rasterio.open(nir08_2_path) as src:
+                nir08_2 = src.read(1)
+            with rasterio.open(swir2_2_path) as src:
+                swir2_2 = src.read(1)
+
+        # --- Download optional blue band (10m) ---
+        blue1 = blue2 = None
+        if blue_s3_url_date1 and blue_s3_url_date2:
+            blue1_path = download_band(blue_s3_url_date1, "blue_d1")
+            blue2_path = download_band(blue_s3_url_date2, "blue_d2")
+            with rasterio.open(blue1_path) as src:
+                blue1 = src.read(1)
+            with rasterio.open(blue2_path) as src:
+                blue2 = src.read(1)
+
+        # ===================================================================
+        # Run Tier 1 (spectral index) and Tier 2 (iMAD) in parallel
+        # ===================================================================
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        clean_location = location.replace(" ", "_").replace(",", "").lower()
+
+        # Prepare geometry clipping resources once (shared by both tiers)
+        aoi_gdf = None
+        aoi_path = None
+        if geometry_s3_url:
+            aoi_gdf = download_geometry_from_s3(geometry_s3_url)
+            with rasterio.open(red1_path) as src:
+                aoi_gdf = aoi_gdf.to_crs(src.crs)
+            aoi_path = f"{temp_dir}/aoi.geojson"
+            aoi_gdf.to_file(aoi_path, driver='GeoJSON')
+
+        def run_tier1():
+            """Tier 1: Spectral index differencing (NDVI + NDWI + NBR)."""
+            deltas = {}
+            deltas["NDVI"] = compute_index_delta(red1, nir1, red2, nir2, "NDVI")
+            logger.info(f"   ✅ NDVI delta computed (mean={np.mean(deltas['NDVI']):.4f})")
+
+            deltas["NDWI"] = compute_index_delta(green1, nir1, green2, nir2, "NDWI")
+            logger.info(f"   ✅ NDWI delta computed (mean={np.mean(deltas['NDWI']):.4f})")
+
+            if nir08_1 is not None:
+                nbr_delta_20m = compute_index_delta(nir08_1, swir2_1, nir08_2, swir2_2, "NBR")
+                from scipy.ndimage import zoom
+                scale_y = red1.shape[0] / nbr_delta_20m.shape[0]
+                scale_x = red1.shape[1] / nbr_delta_20m.shape[1]
+                nbr_delta_10m = zoom(nbr_delta_20m, (scale_y, scale_x), order=0)
+                nbr_delta_10m = nbr_delta_10m[:red1.shape[0], :red1.shape[1]]
+                deltas["NBR"] = nbr_delta_10m.astype(np.float32)
+                logger.info(f"   ✅ NBR delta computed (mean={np.mean(deltas['NBR']):.4f})")
+            else:
+                logger.info("   ℹ️ NBR skipped (20m bands not provided)")
+
+            # BSI delta (optional — needs blue + swir2 + red + nir)
+            if blue1 is not None and swir2_1 is not None:
+                from scipy.ndimage import zoom as _zoom_bsi
+                # Resample SWIR2 from 20m to 10m
+                sy = red1.shape[0] / swir2_1.shape[0]
+                sx = red1.shape[1] / swir2_1.shape[1]
+                swir2_1_10m = _zoom_bsi(swir2_1, (sy, sx), order=0)[:red1.shape[0], :red1.shape[1]]
+                swir2_2_10m = _zoom_bsi(swir2_2, (sy, sx), order=0)[:red1.shape[0], :red1.shape[1]]
+                deltas["BSI"] = compute_bsi_delta(red1, swir2_1_10m, nir1, blue1,
+                                                   red2, swir2_2_10m, nir2, blue2)
+                logger.info(f"   ✅ BSI delta computed (mean={np.mean(deltas['BSI']):.4f})")
+            else:
+                logger.info("   ℹ️ BSI skipped (blue or swir2 bands not provided)")
+
+            composite = compute_composite_change_score(deltas)
+            logger.info(f"   ✅ Tier 1 composite: mean={np.mean(composite):.4f}, max={np.max(composite):.4f}")
+
+            # Write temp raster
+            t1_temp = f"{temp_dir}/tier1_temp.tif"
+            t1_profile = profile.copy()
+            t1_profile.update({'driver': 'GTiff', 'dtype': rasterio.float32, 'count': 1})
+            with rasterio.open(t1_temp, 'w', **t1_profile) as dst:
+                dst.write_band(1, composite)
+
+            # Clip
+            t1_cog = f"{temp_dir}/tier1_cog.tif"
+            if aoi_path:
+                clip_raster_v2(aoi_path, t1_temp, t1_cog)
+            else:
+                shutil.copy(t1_temp, t1_cog)
+
+            # Upload
+            s3_key = f"session_data/{session_id}/rasters/change_detection_{clean_location}_{date1_str}_to_{date2_str}.tif"
+            s3_client.upload_file(t1_cog, bucket_name, s3_key)
+            url = f"s3://{bucket_name}/{s3_key}"
+            logger.info(f"   ✅ Tier 1 change map uploaded: {url}")
+
+            # Stats
+            with rasterio.open(t1_cog) as src:
+                data = src.read(1)
+                t = src.transform
+                pix_area = abs(t.a) * abs(t.e)
+            stats = compute_change_statistics(data, pix_area)
+
+            return {"url": url, "stats": stats, "indices_used": list(deltas.keys())}
+
+        def run_tier2_imad():
+            """Tier 2: iMAD on normalized spectral indices (NDVI, NDWI, optionally NBR).
+
+            Using indices instead of raw bands suppresses atmospheric/illumination
+            noise that causes false positives, while iMAD adds multivariate
+            statistical rigor on top.
+            """
+            try:
+                eps = 1e-10
+
+                # Compute NDVI for both dates: (NIR - Red) / (NIR + Red)
+                ndvi_d1 = (nir1.astype(np.float64) - red1.astype(np.float64)) / (nir1 + red1 + eps)
+                ndvi_d2 = (nir2.astype(np.float64) - red2.astype(np.float64)) / (nir2 + red2 + eps)
+
+                # Compute NDWI for both dates: (Green - NIR) / (Green + NIR)
+                ndwi_d1 = (green1.astype(np.float64) - nir1.astype(np.float64)) / (green1 + nir1 + eps)
+                ndwi_d2 = (green2.astype(np.float64) - nir2.astype(np.float64)) / (green2 + nir2 + eps)
+
+                bands_d1 = [ndvi_d1, ndwi_d1]
+                bands_d2 = [ndvi_d2, ndwi_d2]
+
+                # Add NBR if 20m bands are available
+                if nir08_1 is not None:
+                    from scipy.ndimage import zoom as _zoom
+                    nbr_d1_20m = (nir08_1.astype(np.float64) - swir2_1.astype(np.float64)) / (nir08_1 + swir2_1 + eps)
+                    nbr_d2_20m = (nir08_2.astype(np.float64) - swir2_2.astype(np.float64)) / (nir08_2 + swir2_2 + eps)
+                    # Resample 20m NBR to 10m
+                    sy = red1.shape[0] / nbr_d1_20m.shape[0]
+                    sx = red1.shape[1] / nbr_d1_20m.shape[1]
+                    nbr_d1 = _zoom(nbr_d1_20m, (sy, sx), order=0)[:red1.shape[0], :red1.shape[1]]
+                    nbr_d2 = _zoom(nbr_d2_20m, (sy, sx), order=0)[:red1.shape[0], :red1.shape[1]]
+                    bands_d1.append(nbr_d1)
+                    bands_d2.append(nbr_d2)
+
+                image1 = np.stack(bands_d1, axis=0)
+                image2 = np.stack(bands_d2, axis=0)
+
+                n_idx = image1.shape[0]
+                logger.info(f"   🔬 iMAD: Running on {n_idx} indices, {image1.shape[1]}x{image1.shape[2]} pixels")
+
+                imad_score = imad_change_score(image1, image2, max_iter=30, tol=1e-3)
+                logger.info(f"   ✅ iMAD score: mean={np.mean(imad_score):.4f}, max={np.max(imad_score):.4f}")
+
+                # Write temp raster
+                t2_temp = f"{temp_dir}/imad_temp.tif"
+                t2_profile = profile.copy()
+                t2_profile.update({'driver': 'GTiff', 'dtype': rasterio.float32, 'count': 1})
+                with rasterio.open(t2_temp, 'w', **t2_profile) as dst:
+                    dst.write_band(1, imad_score)
+
+                # Clip
+                t2_cog = f"{temp_dir}/imad_cog.tif"
+                if aoi_path:
+                    clip_raster_v2(aoi_path, t2_temp, t2_cog)
+                else:
+                    shutil.copy(t2_temp, t2_cog)
+
+                # Upload
+                s3_key = f"session_data/{session_id}/rasters/change_detection_imad_{clean_location}_{date1_str}_to_{date2_str}.tif"
+                s3_client.upload_file(t2_cog, bucket_name, s3_key)
+                url = f"s3://{bucket_name}/{s3_key}"
+                logger.info(f"   ✅ iMAD change map uploaded: {url}")
+
+                # Stats
+                with rasterio.open(t2_cog) as src:
+                    data = src.read(1)
+                    t = src.transform
+                    pix_area = abs(t.a) * abs(t.e)
+                stats = compute_change_statistics(data, pix_area)
+
+                return {"url": url, "stats": stats}
+
+            except Exception as e:
+                logger.error(f"   ⚠️ iMAD failed (Tier 1 still available): {e}", exc_info=True)
+                return None
+
+        # Run Tier 1 (spectral composite) and Tier 2 (iMAD) in parallel.
+        # NOTE: embedding-based change detection is intentionally handled by the
+        # dedicated country/state-wide scan_region_change tool, not here. Keeping
+        # this tool to two tiers also bounds its peak memory footprint.
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            tier1_future = executor.submit(run_tier1)
+            tier2_future = executor.submit(run_tier2_imad)
+
+            tier1_result = tier1_future.result()
+            tier2_result = tier2_future.result()
+        _log_mem("change_detection:after_tiers")
+
+        # --- Build combined result ---
+        stats = tier1_result["stats"]
+        result = {
+            "index_type": "CHANGE_DETECTION",
+            "location": location,
+            "date1": date1_str,
+            "date2": date2_str,
+            "indices_used": tier1_result["indices_used"],
+            "change_map_s3_url": tier1_result["url"],
+            "no_change_percentage": stats["no_change_pct"],
+            "no_change_area_m2": stats["no_change_area_m2"],
+            "low_change_percentage": stats["low_change_pct"],
+            "low_change_area_m2": stats["low_change_area_m2"],
+            "moderate_change_percentage": stats["moderate_change_pct"],
+            "moderate_change_area_m2": stats["moderate_change_area_m2"],
+            "high_change_percentage": stats["high_change_pct"],
+            "high_change_area_m2": stats["high_change_area_m2"],
+            "mean_change_score": stats["mean_change_score"],
+            "max_change_score": stats["max_change_score"],
+            "total_changed_area_m2": stats["moderate_change_area_m2"] + stats["high_change_area_m2"],
+        }
+
+        # Add iMAD results if available
+        if tier2_result:
+            imad_stats = tier2_result["stats"]
+            result["imad_change_map_s3_url"] = tier2_result["url"]
+            result["imad_no_change_percentage"] = imad_stats["no_change_pct"]
+            result["imad_high_change_percentage"] = imad_stats["high_change_pct"]
+            result["imad_mean_change_score"] = imad_stats["mean_change_score"]
+            result["imad_total_changed_area_m2"] = imad_stats["moderate_change_area_m2"] + imad_stats["high_change_area_m2"]
+
+        logger.info(f"✅ CHANGE DETECTION SUCCESS: Tier1 No change={stats['no_change_pct']:.1f}%, "
+                     f"Low={stats['low_change_pct']:.1f}%, Moderate={stats['moderate_change_pct']:.1f}%, "
+                     f"High={stats['high_change_pct']:.1f}%")
+        if tier2_result:
+            logger.info(f"   iMAD: No change={imad_stats['no_change_pct']:.1f}%, "
+                         f"High={imad_stats['high_change_pct']:.1f}%")
+
+        return json.dumps(result)
+
+    except Exception as e:
+        error_msg = f"❌ CHANGE DETECTION ERROR: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return json.dumps({"error": error_msg})
+
+    finally:
+        try:
+            import shutil as _shutil
+            if os.path.exists(temp_dir):
+                _shutil.rmtree(temp_dir)
+        except Exception:
+            pass
