@@ -10,6 +10,12 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Raise the application's own module loggers (utils.*) to INFO so their
+# diagnostics — tool progress, memory instrumentation, and error context —
+# are captured to CloudWatch. The root stays at WARNING so noisy third-party
+# loggers (boto3, botocore, urllib3, rasterio) don't flood the logs.
+logging.getLogger("utils").setLevel(logging.INFO)
+
 from strands.telemetry import StrandsTelemetry
 
 # Import BedrockAgentCoreApp
