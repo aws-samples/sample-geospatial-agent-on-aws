@@ -339,7 +339,10 @@ def _scan_with_lambda_fanout(
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     west, south, east, north = bbox
-    lambda_client = boto3.client('lambda', region_name='us-east-1')
+    # The lgnd-partition-query Lambda is deployed in the LGND data region
+    # (us-west-2) so its parquet reads are local. Configurable via env.
+    lambda_region = os.environ.get('LGND_LAMBDA_REGION', 'us-west-2')
+    lambda_client = boto3.client('lambda', region_name=lambda_region)
 
     print(f"🚀 Scanning {len(geohashes)} partitions via Lambda fan-out (parallel)...")
 

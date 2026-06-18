@@ -94,39 +94,37 @@ def handler(event, context):
         # Index period 2 by cell_id
         d2_map = {row[0]: (row[1], row[2]) for row in rows2}
 
-        # Compute cosine similarity for matched cells
+        # Match cells present in both periods, then compute cosine similarity for
+        # all matched cells at once (vectorized) instead of a per-cell Python loop.
+        common = [row[0] for row in rows1 if row[0] in d2_map]
+        matched = len(common)
         changed_cells = []
-        matched = 0
 
-        for row in rows1:
-            cell_id = row[0]
-            if cell_id not in d2_map:
-                continue
-            matched += 1
+        if common:
+            d1_map = {row[0]: row[1] for row in rows1}
+            A = np.asarray([d1_map[c] for c in common], dtype=np.float32)
+            B = np.asarray([d2_map[c][0] for c in common], dtype=np.float32)
 
-            emb1 = np.array(row[1], dtype=np.float32)
-            emb2 = np.array(d2_map[cell_id][0], dtype=np.float32)
-            cell_bbox = d2_map[cell_id][1]
+            nA = np.linalg.norm(A, axis=1)
+            nB = np.linalg.norm(B, axis=1)
+            denom = nA * nB
+            valid = denom > 0
 
-            norm1 = np.linalg.norm(emb1)
-            norm2 = np.linalg.norm(emb2)
-            if norm1 == 0 or norm2 == 0:
-                continue
+            sims = np.zeros(matched, dtype=np.float32)
+            sims[valid] = np.sum(A[valid] * B[valid], axis=1) / denom[valid]
 
-            sim = float(np.dot(emb1, emb2) / (norm1 * norm2))
+            scores = np.clip((SIM_HIGH - sims) / SIM_RANGE, 0.0, 1.0)
 
-            # Skip likely cloud/snow/nodata artifacts (degenerate embeddings)
-            if sim < ARTIFACT_SIM_FLOOR:
-                continue
-
-            change_score = float(np.clip((SIM_HIGH - sim) / SIM_RANGE, 0.0, 1.0))
-
-            if change_score >= min_change_score:
+            # Keep only real change: valid embeddings, above the artifact floor,
+            # and over the change-score threshold.
+            keep = valid & (sims >= ARTIFACT_SIM_FLOOR) & (scores >= min_change_score)
+            for i in np.nonzero(keep)[0]:
+                cid = common[i]
                 changed_cells.append({
-                    "cell_id": cell_id,
-                    "change_score": round(change_score, 4),
-                    "similarity": round(sim, 4),
-                    "bbox": cell_bbox,
+                    "cell_id": cid,
+                    "change_score": round(float(scores[i]), 4),
+                    "similarity": round(float(sims[i]), 4),
+                    "bbox": d2_map[cid][1],
                 })
 
         return {
