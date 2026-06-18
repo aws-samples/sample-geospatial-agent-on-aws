@@ -61,7 +61,8 @@ agentcore configure \
     --ecr ${ECR_REPO_NAME} \
     --execution-role "${AGENTCORE_ARN}" \
     --disable-memory \
-    --disable-otel
+    --disable-otel \
+    --non-interactive
 
 # Restore Dockerfile
 cp Dockerfile_geospatial_agent_on_aws Dockerfile
