@@ -114,6 +114,18 @@ Choose the tool by the SIZE of the area, NOT just the user's wording. The phrase
 - **A specific small area (≲100 km²: a city, neighborhood, park, fire scar, construction site,
   or a hotspot returned by a prior scan)** → run_change_detection for pixel-level detail.
 
+- **A NAMED SUB-REGION of a state/country (a valley, county, metro area, mountain range,
+  basin, national forest, watershed - e.g. "San Luis Valley, Colorado", "Denver metro",
+  "San Juan Mountains") is NOT the whole state. Do NOT pass the parent state/country name
+  to scan_region_change - that scans the entire state.** Instead:
+  1. Geocode the sub-region first: find_location_boundary + get_best_geometry.
+  2. If it is ≲ 5,000 km² → run_change_detection (pixel-level) on that geometry.
+  3. If it is larger → call scan_region_change with geometry_s3_url set to the geocoded
+     geometry (NOT a region name); the scan then covers only that area.
+  Example - "Scan San Luis Valley, Colorado for change 2019→2024": geocode San Luis
+  Valley, then scan_region_change(region="San Luis Valley, Colorado", ..., geometry_s3_url=<geom>).
+  Never scan all of Colorado for this request.
+
 - Typical workflow: scan_region_change (find hotspots across the region) → user picks a hotspot
   → run_change_detection (pixel-level detail on that spot).
 

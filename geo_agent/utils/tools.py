@@ -834,6 +834,7 @@ async def scan_region_change(
     year2: int,
     month2: int,
     top_n: int = 20,
+    geometry_s3_url: str = None,
 ) -> str:
     """Scan an entire country or large region for land surface change hotspots using Clay AI embeddings.
 
@@ -846,12 +847,19 @@ async def scan_region_change(
     Peru, Costa Rica, etc.) work well.
 
     Args:
-        region: Country name (e.g. "Colombia", "Brazil", "Costa Rica") or "custom" with bbox
+        region: Whole country or US state name (e.g. "Colombia", "Colorado"). For a
+            named SUB-REGION, also pass geometry_s3_url (see below) - do NOT rely on the name.
         year1: Earlier year (e.g. 2020)
         month1: Earlier month (1-12)
         year2: Later year (e.g. 2025)
         month2: Later month (1-12)
         top_n: Number of top hotspots to return (default 20)
+        geometry_s3_url: OPTIONAL. For a NAMED SUB-REGION (valley, county, metro, basin,
+            mountain range, national forest - anything smaller than a whole supported
+            country/state), geocode the area first (find_location_boundary +
+            get_best_geometry) and pass the resulting geometry here; the scan then covers
+            only that area's bounding box. Leave unset only for a whole supported
+            country/US-state named in `region`.
 
     Returns: JSON with:
         - summary: total cells scanned, area covered, % changed, timing
@@ -876,21 +884,37 @@ async def scan_region_change(
     from .lgnd_embeddings import scan_region_change as _scan_region, COUNTRY_BBOXES
 
     try:
-        # Resolve region to bbox
         region_lower = region.lower().strip()
-        if region_lower in COUNTRY_BBOXES:
+        # Resolve the scan bbox. Priority:
+        #   1. An explicit geocoded geometry (sub-regions: valleys, counties, metros,
+        #      basins, parks - anything that is not a whole supported country/state).
+        #   2. An EXACT match in the known whole-country/state table.
+        # We intentionally do NOT substring-match the name against the table, so that
+        # "San Luis Valley, Colorado" never collapses to the whole Colorado bbox.
+        if geometry_s3_url:
+            try:
+                geom_gdf = download_geometry_from_s3(geometry_s3_url).to_crs("EPSG:4326")
+                minx, miny, maxx, maxy = (float(v) for v in geom_gdf.total_bounds)
+                bbox = (minx, miny, maxx, maxy)
+                logger.info("REGION SCAN (geocoded sub-region): %s bbox=%s, %d-%02d -> %d-%02d",
+                            region, bbox, year1, month1, year2, month2)
+            except Exception as e:
+                return json.dumps({"error": f"Could not read geometry for '{region}': {e}"})
+        elif region_lower in COUNTRY_BBOXES:
             bbox = COUNTRY_BBOXES[region_lower]
-            logger.info(f"🌍 REGION SCAN: {region} ({bbox}), {year1}-{month1:02d} → {year2}-{month2:02d}")
+            logger.info("REGION SCAN: %s (%s), %d-%02d -> %d-%02d",
+                        region, bbox, year1, month1, year2, month2)
         else:
-            # Try to find a partial match
-            matches = [k for k in COUNTRY_BBOXES if region_lower in k or k in region_lower]
-            if matches:
-                bbox = COUNTRY_BBOXES[matches[0]]
-                logger.info(f"🌍 REGION SCAN: {region} (matched '{matches[0]}'), {year1}-{month1:02d} → {year2}-{month2:02d}")
-            else:
-                return json.dumps({
-                    "error": f"Unknown region: '{region}'. Supported countries: {', '.join(sorted(COUNTRY_BBOXES.keys())[:20])}... Use run_change_detection with a specific bbox for custom areas."
-                })
+            return json.dumps({
+                "error": (
+                    f"'{region}' is not a recognized whole country or US state. If it is a "
+                    f"sub-region (valley, county, metro, basin, park, mountain range, etc.), "
+                    f"geocode it first with find_location_boundary + get_best_geometry, then "
+                    f"call scan_region_change again with geometry_s3_url set to that geometry. "
+                    f"Do NOT substitute the parent state/country."
+                ),
+                "supported_whole_regions_sample": sorted(COUNTRY_BBOXES.keys())[:20],
+            })
 
         # Check if region is very large (>20 geohashes would be excessive)
         from .lgnd_embeddings import _get_geohashes_for_bbox
