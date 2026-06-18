@@ -278,7 +278,7 @@ export class GeospatialAgentStack extends cdk.Stack {
     const dockerImage = new ecr_assets.DockerImageAsset(this, 'AppImage', {
       directory: path.join(__dirname, '../../react-ui'),
       file: 'Dockerfile',
-      platform: ecr_assets.Platform.LINUX_AMD64,
+      platform: ecr_assets.Platform.LINUX_ARM64,
     });
 
     // ========================================
@@ -318,6 +318,10 @@ export class GeospatialAgentStack extends cdk.Stack {
       cpu: config.cpu,
       memoryLimitMiB: config.memoryLimitMiB,
       desiredCount: config.desiredCount,
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
       taskImageOptions: {
         image: ecs.ContainerImage.fromDockerImageAsset(dockerImage),
         containerName: 'app',
@@ -524,7 +528,6 @@ export class GeospatialAgentStack extends cdk.Stack {
           // backend's 10s SSE keepalive, this prevents CloudFront 504s on long scans.
           readTimeout: cdk.Duration.seconds(60),
           keepaliveTimeout: cdk.Duration.seconds(60),
-          readTimeout: cdk.Duration.seconds(60),
           customHeaders: {
             [customHeaderName]: customHeaderValue,
           },

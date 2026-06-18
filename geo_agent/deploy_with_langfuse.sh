@@ -39,20 +39,33 @@ LANGFUSE_AUTH=$(echo -n "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" | base64
 OTEL_ENDPOINT="${LANGFUSE_BASE_URL}/api/public/otel"
 OTEL_HEADERS="Authorization=Basic ${LANGFUSE_AUTH}"
 
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ECR_SHORT_NAME="bedrock-agentcore-geospatial_agent_on_aws"
+ECR_REPO_NAME="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_SHORT_NAME}"
+
+# Ensure ECR repo exists (first deploy needs this)
+aws ecr describe-repositories --repository-names ${ECR_SHORT_NAME} --region ${AWS_REGION} >/dev/null 2>&1 || \
+  aws ecr create-repository --repository-name ${ECR_SHORT_NAME} --region ${AWS_REGION} >/dev/null 2>&1
+
 echo "📝 Configuration:"
 echo "   Agent: geospatial_agent_on_aws"
 echo "   Entrypoint: geospatial_agent_on_aws.py"
+echo "   AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
 echo "   Langfuse URL: ${LANGFUSE_BASE_URL}"
 echo "   OTEL Endpoint: ${OTEL_ENDPOINT}"
+echo "   ECR_REPO_NAME: ${ECR_REPO_NAME}"
+echo "   LGND Embeddings: ${LGND_EMBEDDINGS_ENABLED:-false}"
 echo ""
 
-# # Configure agent (if not already configured)
-# echo "⚙️  Configuring agent..."
-# Use yes to auto-accept all prompts
-yes "" | agentcore configure \
+# Configure agent
+echo "⚙️  Configuring agent..."
+agentcore configure \
   --entrypoint geospatial_agent_on_aws.py \
   --name geospatial_agent_on_aws \
+  --deployment-type container \
+  --ecr ${ECR_REPO_NAME} \
   --execution-role ${AGENTCORE_ARN} \
+  --disable-memory \
   --disable-otel
 
 echo ""
@@ -67,6 +80,7 @@ agentcore launch \
   --env "S3_BUCKET_NAME=${S3_BUCKET_NAME}" \
   --env "MODEL_ID=${BEDROCK_MODEL_ID}" \
   --env "BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID}" \
+  --env "LGND_EMBEDDINGS_ENABLED=${LGND_EMBEDDINGS_ENABLED:-false}" \
   --env "OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_ENDPOINT}" \
   --env "LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}" \
   --env "LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}" \

@@ -139,6 +139,12 @@ def create_agentcore_role(agent_name: str, s3_bucket_name: str, region: str = No
                     "geo-places:Autocomplete"
                     ],
                 "Resource": "*"
+            },
+            {
+                "Sid": "LambdaInvokeForChangeDetection",
+                "Effect": "Allow",
+                "Action": "lambda:InvokeFunction",
+                "Resource": f"arn:aws:lambda:{region}:{account_id}:function:lgnd-partition-query"
 		    }
         ]
     }
