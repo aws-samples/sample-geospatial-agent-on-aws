@@ -35,7 +35,6 @@ Output:
 """
 import json
 import duckdb
-import numpy as np
 
 
 MONTHLY_PATH = "s3://us-west-2.opendata.source.coop/clay/lgnd-embeddings/monthly-aggregated"
@@ -81,57 +80,68 @@ def handler(event, context):
     bbox_filter = f"WHERE bbox.xmin <= {east} AND bbox.xmax >= {west} AND bbox.ymin <= {north} AND bbox.ymax >= {south}"
 
     try:
-        # Query period 1
-        path1 = f"{MONTHLY_PATH}/model_version={DEFAULT_MODEL_VERSION}/collection={DEFAULT_COLLECTION}/chip_size={DEFAULT_CHIP_SIZE}/dims={DEFAULT_DIMS}/geohash={gh}/year={year1}/month={month1:02d}/*.parquet"
-        rows1 = con.execute(f"SELECT cell_id, embedding FROM read_parquet('{path1}', hive_partitioning=true) {bbox_filter}").fetchall()
+        base = (f"{MONTHLY_PATH}/model_version={DEFAULT_MODEL_VERSION}"
+                f"/collection={DEFAULT_COLLECTION}/chip_size={DEFAULT_CHIP_SIZE}"
+                f"/dims={DEFAULT_DIMS}/geohash={gh}")
+        path1 = f"{base}/year={year1}/month={month1:02d}/*.parquet"
+        path2 = f"{base}/year={year2}/month={month2:02d}/*.parquet"
 
-        # Query period 2 (with bbox for output)
-        path2 = f"{MONTHLY_PATH}/model_version={DEFAULT_MODEL_VERSION}/collection={DEFAULT_COLLECTION}/chip_size={DEFAULT_CHIP_SIZE}/dims={DEFAULT_DIMS}/geohash={gh}/year={year2}/month={month2:02d}/*.parquet"
-        rows2 = con.execute(f"SELECT cell_id, embedding, bbox FROM read_parquet('{path2}', hive_partitioning=true) {bbox_filter}").fetchall()
+        # Cell counts. Reads only the cell_id column (parquet column pruning), so
+        # this stays cheap and never materializes embeddings.
+        counts = con.execute(f"""
+            WITH d1 AS (SELECT cell_id FROM read_parquet('{path1}', hive_partitioning=true) {bbox_filter}),
+                 d2 AS (SELECT cell_id FROM read_parquet('{path2}', hive_partitioning=true) {bbox_filter})
+            SELECT (SELECT count(*) FROM d1),
+                   (SELECT count(*) FROM d2),
+                   (SELECT count(*) FROM d1 JOIN d2 USING (cell_id))
+        """).fetchone()
+        total_d1, total_d2, matched = int(counts[0]), int(counts[1]), int(counts[2])
+
+        # Change detection. Cosine similarity is computed INSIDE DuckDB via
+        # list_cosine_similarity, so the 256-dim embeddings never cross into
+        # Python -- only cells past the artifact floor + change threshold come
+        # back. This keeps the function fast and bounds peak memory (the previous
+        # per-cell numpy approach materialized every embedding and peaked near the
+        # memory limit on dense partitions).
+        rows = con.execute(f"""
+            WITH d1 AS (
+                SELECT cell_id, embedding AS e1
+                FROM read_parquet('{path1}', hive_partitioning=true) {bbox_filter}
+            ),
+            d2 AS (
+                SELECT cell_id, embedding AS e2, bbox
+                FROM read_parquet('{path2}', hive_partitioning=true) {bbox_filter}
+            ),
+            sims AS (
+                SELECT d1.cell_id AS cell_id,
+                       list_cosine_similarity(d1.e1, d2.e2) AS sim,
+                       d2.bbox AS bbox
+                FROM d1 JOIN d2 USING (cell_id)
+            )
+            SELECT cell_id, sim, bbox,
+                   greatest(0.0, least(1.0, ({SIM_HIGH} - sim) / {SIM_RANGE})) AS change_score
+            FROM sims
+            WHERE sim >= {ARTIFACT_SIM_FLOOR}
+              AND greatest(0.0, least(1.0, ({SIM_HIGH} - sim) / {SIM_RANGE})) >= {min_change_score}
+        """).fetchall()
 
         con.close()
 
-        # Index period 2 by cell_id
-        d2_map = {row[0]: (row[1], row[2]) for row in rows2}
-
-        # Match cells present in both periods, then compute cosine similarity for
-        # all matched cells at once (vectorized) instead of a per-cell Python loop.
-        common = [row[0] for row in rows1 if row[0] in d2_map]
-        matched = len(common)
-        changed_cells = []
-
-        if common:
-            d1_map = {row[0]: row[1] for row in rows1}
-            A = np.asarray([d1_map[c] for c in common], dtype=np.float32)
-            B = np.asarray([d2_map[c][0] for c in common], dtype=np.float32)
-
-            nA = np.linalg.norm(A, axis=1)
-            nB = np.linalg.norm(B, axis=1)
-            denom = nA * nB
-            valid = denom > 0
-
-            sims = np.zeros(matched, dtype=np.float32)
-            sims[valid] = np.sum(A[valid] * B[valid], axis=1) / denom[valid]
-
-            scores = np.clip((SIM_HIGH - sims) / SIM_RANGE, 0.0, 1.0)
-
-            # Keep only real change: valid embeddings, above the artifact floor,
-            # and over the change-score threshold.
-            keep = valid & (sims >= ARTIFACT_SIM_FLOOR) & (scores >= min_change_score)
-            for i in np.nonzero(keep)[0]:
-                cid = common[i]
-                changed_cells.append({
-                    "cell_id": cid,
-                    "change_score": round(float(scores[i]), 4),
-                    "similarity": round(float(sims[i]), 4),
-                    "bbox": d2_map[cid][1],
-                })
+        changed_cells = [
+            {
+                "cell_id": r[0],
+                "change_score": round(float(r[3]), 4),
+                "similarity": round(float(r[1]), 4),
+                "bbox": r[2],
+            }
+            for r in rows
+        ]
 
         return {
             "statusCode": 200,
             "changed_cells": changed_cells,
-            "total_d1": len(rows1),
-            "total_d2": len(rows2),
+            "total_d1": total_d1,
+            "total_d2": total_d2,
             "matched": matched,
             "above_threshold": len(changed_cells),
             "geohash": gh,
