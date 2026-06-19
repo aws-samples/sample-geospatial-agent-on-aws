@@ -835,6 +835,7 @@ async def scan_region_change(
     month2: int,
     top_n: int = 20,
     geometry_s3_url: str = None,
+    bbox: list = None,
 ) -> str:
     """Scan an entire country or large region for land surface change hotspots using Clay AI embeddings.
 
@@ -854,6 +855,9 @@ async def scan_region_change(
         year2: Later year (e.g. 2025)
         month2: Later month (1-12)
         top_n: Number of top hotspots to return (default 20)
+        bbox: OPTIONAL [west, south, east, north] in degrees. PREFERRED way to scan a
+            NAMED SUB-REGION (valley, basin, metro, mountain range): pass the area's
+            approximate extent directly. Do NOT pass the parent state/country name.
         geometry_s3_url: OPTIONAL. For a NAMED SUB-REGION (valley, county, metro, basin,
             mountain range, national forest - anything smaller than a whole supported
             country/state), geocode the area first (find_location_boundary +
@@ -886,12 +890,23 @@ async def scan_region_change(
     try:
         region_lower = region.lower().strip()
         # Resolve the scan bbox. Priority:
-        #   1. An explicit geocoded geometry (sub-regions: valleys, counties, metros,
-        #      basins, parks - anything that is not a whole supported country/state).
-        #   2. An EXACT match in the known whole-country/state table.
-        # We intentionally do NOT substring-match the name against the table, so that
+        #   1. An explicit bbox [west, south, east, north] in degrees - best for a
+        #      named sub-region whose extent the caller knows (valley/basin/metro).
+        #   2. A geocoded geometry (geometry_s3_url) -> use its bounds.
+        #   3. An EXACT match in the known whole-country/state table.
+        # We intentionally do NOT substring-match the name against the table, so
         # "San Luis Valley, Colorado" never collapses to the whole Colorado bbox.
-        if geometry_s3_url:
+        if bbox is not None:
+            try:
+                if isinstance(bbox, str):
+                    bbox = [float(x) for x in bbox.strip("[]() ").split(",")]
+                w, s, e, n = (float(v) for v in bbox)
+                bbox = (w, s, e, n)
+                logger.info("REGION SCAN (explicit bbox): %s %s, %d-%02d -> %d-%02d",
+                            region, bbox, year1, month1, year2, month2)
+            except Exception:
+                return json.dumps({"error": f"Invalid bbox {bbox!r}; expected [west, south, east, north] in degrees."})
+        elif geometry_s3_url:
             try:
                 geom_gdf = download_geometry_from_s3(geometry_s3_url).to_crs("EPSG:4326")
                 minx, miny, maxx, maxy = (float(v) for v in geom_gdf.total_bounds)
@@ -909,9 +924,9 @@ async def scan_region_change(
                 "error": (
                     f"'{region}' is not a recognized whole country or US state. If it is a "
                     f"sub-region (valley, county, metro, basin, park, mountain range, etc.), "
-                    f"geocode it first with find_location_boundary + get_best_geometry, then "
-                    f"call scan_region_change again with geometry_s3_url set to that geometry. "
-                    f"Do NOT substitute the parent state/country."
+                    f"pass its extent directly as bbox=[west, south, east, north] in degrees "
+                    f"(or geometry_s3_url from a geocoded boundary). Do NOT substitute the "
+                    f"parent state/country."
                 ),
                 "supported_whole_regions_sample": sorted(COUNTRY_BBOXES.keys())[:20],
             })

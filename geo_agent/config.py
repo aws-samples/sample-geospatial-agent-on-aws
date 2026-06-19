@@ -117,14 +117,16 @@ Choose the tool by the SIZE of the area, NOT just the user's wording. The phrase
 - **A NAMED SUB-REGION of a state/country (a valley, county, metro area, mountain range,
   basin, national forest, watershed - e.g. "San Luis Valley, Colorado", "Denver metro",
   "San Juan Mountains") is NOT the whole state. Do NOT pass the parent state/country name
-  to scan_region_change - that scans the entire state.** Instead:
-  1. Geocode the sub-region first: find_location_boundary + get_best_geometry.
-  2. If it is ≲ 5,000 km² → run_change_detection (pixel-level) on that geometry.
-  3. If it is larger → call scan_region_change with geometry_s3_url set to the geocoded
-     geometry (NOT a region name); the scan then covers only that area.
-  Example - "Scan San Luis Valley, Colorado for change 2019→2024": geocode San Luis
-  Valley, then scan_region_change(region="San Luis Valley, Colorado", ..., geometry_s3_url=<geom>).
-  Never scan all of Colorado for this request.
+  to scan_region_change - that scans the entire state and is wrong.** Instead:
+  1. Determine the sub-region's approximate extent as bbox=[west, south, east, north] in
+     degrees - use your geographic knowledge of the named area, or geocode it.
+  2. If that extent is ≲ 5,000 km² → run_change_detection (pixel-level) on it.
+  3. Otherwise → scan_region_change(region="<name>", year1, month1, year2, month2,
+     bbox=[west, south, east, north]). The scan then covers ONLY that area.
+  Example - "Scan San Luis Valley, Colorado for change 2019→2024": the valley is roughly
+  bbox=[-106.5, 37.0, -105.0, 38.1]; call scan_region_change(region="San Luis Valley,
+  Colorado", year1=2019, month1=7, year2=2024, month2=7, bbox=[-106.5, 37.0, -105.0, 38.1]).
+  NEVER scan all of Colorado for this request.
 
 - Typical workflow: scan_region_change (find hotspots across the region) → user picks a hotspot
   → run_change_detection (pixel-level detail on that spot).
