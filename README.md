@@ -13,6 +13,7 @@ An AI agent that analyzes satellite imagery for any location on Earth using natu
 "Assess wildfire damage near Pacific Palisades, Los Angeles in January 2025"     --> NBR burn severity map
 "Compare water levels for Folsom Lake, California 2021 vs 2022"                  --> NDWI water body analysis
 "Show vegetation status for Hyde Park, London"                                   --> NDVI with OSM boundary
+"Scan Colorado for land change between 2019 and 2024"                            --> LGND embedding change scan
 ```
 
 ## Architecture
@@ -133,7 +134,22 @@ sed -i.bak \
 > LANGFUSE_BASE_URL=https://cloud.langfuse.com
 > ```
 
-### Step 5: Test Agent (optional)
+### Step 5: Deploy Change Detection (optional)
+
+Enables region-wide change scanning using [LGND/Clay](https://source.coop/clay/lgnd-embeddings/) pre-computed embeddings.
+
+```bash
+cd ../frontend-cdk
+npx cdk deploy ChangeDetectionStack --require-approval never
+```
+
+Then set `LGND_EMBEDDINGS_ENABLED=true` in `geo_agent/.env` and redeploy the agent.
+
+```bash
+cd ../geo_agent
+```
+
+### Step 6: Test Agent (optional)
 
 ```bash
 agentcore invoke '{"prompt": "Show vegetation health for Central Park, New York"}'
