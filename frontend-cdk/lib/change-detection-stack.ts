@@ -36,7 +36,7 @@ export class ChangeDetectionStack extends cdk.Stack {
       code: lambda.DockerImageCode.fromImageAsset(
         path.join(__dirname, '..', '..', 'geo_agent', 'lambda_functions', 'lgnd_query'),
       ),
-      timeout: cdk.Duration.seconds(300),
+      timeout: cdk.Duration.seconds(120),
       memorySize: 2048,
       architecture: lambda.Architecture.X86_64,
       description: `LGND embedding partition query for region-wide change scan (${environment})`,
