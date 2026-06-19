@@ -249,36 +249,46 @@ def get_filtered_images(aoi_gdf, bands=["red", "nir"], max_cloud=30, current_dat
         # Clean location name for filename
         clean_location = location.replace(" ", "_").replace(",", "").lower() if location else "unknown"
         
-        # Clip and upload TCI (crop to AOI geometry)
-        tci_temp = f"{temp_dir}/tci_clipped_{clean_location}_{image_date}.tif"
-        clip_raster_v2(aoi_path, f"/vsicurl/{best_image['tci']}", tci_temp, crop_to_aoi=True)
-        
-        tci_s3_key = f"session_data/{session_id}/rasters/tci_clipped_{clean_location}_{image_date}.tif"
-        s3_client.upload_file(tci_temp, bucket_name, tci_s3_key)
-        
+        # Clip + upload the TCI and every requested band. Each layer is an
+        # independent HTTP COG read + S3 upload (I/O bound), so run them in
+        # parallel instead of sequentially -- this is the dominant cost of
+        # get_rasters (previously ~15s for ~7 layers done one at a time).
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        layers = [("tci", best_image["tci"])]
+        if bands:
+            layers += [(b, best_image[b]) for b in bands if b in best_image]
+
+        def _clip_and_upload(name, href):
+            local = f"{temp_dir}/{name}_clipped_{clean_location}_{image_date}.tif"
+            clip_raster_v2(aoi_path, f"/vsicurl/{href}", local, crop_to_aoi=True)
+            key = f"session_data/{session_id}/rasters/{name}_clipped_{clean_location}_{image_date}.tif"
+            s3_client.upload_file(local, bucket_name, key)
+            return name, f"s3://{bucket_name}/{key}"
+
+        uploaded = {}
+        with ThreadPoolExecutor(max_workers=min(len(layers), 8)) as ex:
+            futures = {ex.submit(_clip_and_upload, n, h): n for n, h in layers}
+            for fut in as_completed(futures):
+                name, url = fut.result()
+                uploaded[name] = url
+
         result = {
             "tci": best_image['tci'],
-            "tci_s3_url": f"s3://{bucket_name}/{tci_s3_key}",
+            "tci_s3_url": uploaded["tci"],
             "thumbnail": best_image['thumbnail'],
             "cloud_pct": best_image.get('cloud_pct', 'N/A'),
             "date": best_image.get('date', 'Unknown date'),
             "tile_id": best_image.get('tile_id', 'Unknown tile ID'),
             "coverage_pct": best_image.get('coverage_pct', 'N/A')
         }
-        
-        # Process bands (crop to AOI geometry)
+
         if bands:
             for band in bands:
-                if band in best_image:
-                    band_temp = f"{temp_dir}/{band}_clipped_{clean_location}_{image_date}.tif"
-                    clip_raster_v2(aoi_path, f"/vsicurl/{best_image[band]}", band_temp, crop_to_aoi=True)
-                    
-                    band_s3_key = f"session_data/{session_id}/rasters/{band}_clipped_{clean_location}_{image_date}.tif"
-                    s3_client.upload_file(band_temp, bucket_name, band_s3_key)
-                    
-                    result[f'{band}_s3_url'] = f"s3://{bucket_name}/{band_s3_key}"
+                if band in best_image and band in uploaded:
+                    result[f'{band}_s3_url'] = uploaded[band]
                     result[band] = best_image[band]
-        
+
         print(f"✅ Successfully processed image from {image_date}")
         return [result]
         
