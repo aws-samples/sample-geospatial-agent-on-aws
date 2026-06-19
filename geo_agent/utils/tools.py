@@ -1186,22 +1186,38 @@ async def run_change_detection(
         nir2_path = download_band(nir_s3_url_date2, "nir_d2")
         green2_path = download_band(green_s3_url_date2, "green_d2")
 
-        # --- Read arrays ---
+        # --- Decide decimation factor from the base (10m) band size ---
+        # Downsampling large AOIs cuts band-read + iMAD cost ~N^2 with negligible
+        # visual impact (change maps are displayed downsampled anyway). Small AOIs
+        # stay full resolution.
+        from rasterio.enums import Resampling
         with rasterio.open(red1_path) as src:
-            red1 = src.read(1)
-            profile = src.profile.copy()
-            transform = src.transform
+            _native_max = max(src.width, src.height)
+        decimate = config.CHANGE_DETECTION_DOWNSAMPLE if _native_max >= 1024 else 1
 
-        with rasterio.open(nir1_path) as src:
-            nir1 = src.read(1)
-        with rasterio.open(green1_path) as src:
-            green1 = src.read(1)
-        with rasterio.open(red2_path) as src:
-            red2 = src.read(1)
-        with rasterio.open(nir2_path) as src:
-            nir2 = src.read(1)
-        with rasterio.open(green2_path) as src:
-            green2 = src.read(1)
+        def _read_band(path):
+            """Read band 1, decimated by `decimate` with averaging resampling."""
+            with rasterio.open(path) as src:
+                oh = max(1, src.height // decimate)
+                ow = max(1, src.width // decimate)
+                return src.read(1, out_shape=(oh, ow), resampling=Resampling.average)
+
+        # --- Read arrays (decimated to a common 10m-equivalent grid) ---
+        with rasterio.open(red1_path) as src:
+            oh = max(1, src.height // decimate)
+            ow = max(1, src.width // decimate)
+            red1 = src.read(1, out_shape=(oh, ow), resampling=Resampling.average)
+            # Scale the transform so the decimated raster stays correctly georeferenced
+            # (keeps per-pixel area, and therefore change-area stats, accurate).
+            transform = src.transform * src.transform.scale(src.width / ow, src.height / oh)
+            profile = src.profile.copy()
+            profile.update({"width": ow, "height": oh, "transform": transform})
+
+        nir1 = _read_band(nir1_path)
+        green1 = _read_band(green1_path)
+        red2 = _read_band(red2_path)
+        nir2 = _read_band(nir2_path)
+        green2 = _read_band(green2_path)
 
         # --- Download optional 20m bands ---
         nir08_1 = nir08_2 = swir2_1 = swir2_2 = None
@@ -1210,25 +1226,18 @@ async def run_change_detection(
             swir2_1_path = download_band(swir2_s3_url_date1, "swir2_d1")
             nir08_2_path = download_band(nir08_s3_url_date2, "nir08_d2")
             swir2_2_path = download_band(swir2_s3_url_date2, "swir2_d2")
-
-            with rasterio.open(nir08_1_path) as src:
-                nir08_1 = src.read(1)
-            with rasterio.open(swir2_1_path) as src:
-                swir2_1 = src.read(1)
-            with rasterio.open(nir08_2_path) as src:
-                nir08_2 = src.read(1)
-            with rasterio.open(swir2_2_path) as src:
-                swir2_2 = src.read(1)
+            nir08_1 = _read_band(nir08_1_path)
+            swir2_1 = _read_band(swir2_1_path)
+            nir08_2 = _read_band(nir08_2_path)
+            swir2_2 = _read_band(swir2_2_path)
 
         # --- Download optional blue band (10m) ---
         blue1 = blue2 = None
         if blue_s3_url_date1 and blue_s3_url_date2:
             blue1_path = download_band(blue_s3_url_date1, "blue_d1")
             blue2_path = download_band(blue_s3_url_date2, "blue_d2")
-            with rasterio.open(blue1_path) as src:
-                blue1 = src.read(1)
-            with rasterio.open(blue2_path) as src:
-                blue2 = src.read(1)
+            blue1 = _read_band(blue1_path)
+            blue2 = _read_band(blue2_path)
 
         # ===================================================================
         # Run Tier 1 (spectral index) and Tier 2 (iMAD) in parallel

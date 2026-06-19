@@ -259,6 +259,12 @@ MAX_CUSTOM_AREA_SIZE_KM2 = int(os.getenv("MAX_CUSTOM_AREA_SIZE_KM2", "100"))
 # covered — such requests are rejected and routed to scan_region_change.
 # A city/metro/county fits comfortably; a state/country does not.
 MAX_CHANGE_DETECTION_AREA_KM2 = int(os.getenv("MAX_CHANGE_DETECTION_AREA_KM2", "5000"))
+
+# Downsample factor for pixel-level run_change_detection. Bands are read at
+# 1/N resolution (averaged), cutting read + iMAD cost ~N^2 with negligible
+# visual impact (change maps are displayed downsampled anyway). Only applied to
+# larger AOIs; small clips stay full resolution. Set to 1 to disable.
+CHANGE_DETECTION_DOWNSAMPLE = int(os.getenv("CHANGE_DETECTION_DOWNSAMPLE", "2"))
 DEFAULT_MAX_CLOUD_COVERAGE = int(os.getenv("DEFAULT_MAX_CLOUD_COVERAGE", "30"))
 FALLBACK_MAX_CLOUD_COVERAGE = int(os.getenv("FALLBACK_MAX_CLOUD_COVERAGE", "80"))
 SATELLITE_BANDS = ["red", "nir"]
