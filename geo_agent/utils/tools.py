@@ -586,6 +586,82 @@ async def get_rasters(location: str, geometry_s3_url: str = None, current_date_s
     return out
 
 
+def _fetch_and_map_rasters(aoi_gdf, location, current_date_str, max_cloud):
+    """Synchronous worker: search + clip + upload Sentinel-2 bands for ONE date.
+
+    Returns a dict matching get_rasters' output shape, or None if no image found.
+    Safe to run in a thread (get_filtered_images uses unique temp dirs + S3 keys).
+    """
+    bands = ["red", "green", "blue", "nir", "nir08", "swir2"]
+    images = get_filtered_images(aoi_gdf, bands=bands, max_cloud=max_cloud,
+                                 current_date_str=current_date_str, location=location)
+    if not images:
+        images = get_filtered_images(aoi_gdf, bands=bands, max_cloud=80,
+                                     current_date_str=current_date_str, location=location)
+    if not images:
+        return None
+    r = images[0]
+    return {
+        "location": str(location),
+        "date_used": r['date'][:10],
+        "tci_s3_url": r.get('tci_s3_url', ''),
+        "red_s3_url": r.get('red_s3_url', ''),
+        "green_s3_url": r.get('green_s3_url', ''),
+        "blue_s3_url": r.get('blue_s3_url', ''),
+        "nir_s3_url": r.get('nir_s3_url', ''),
+        "nir08_s3_url": r.get('nir08_s3_url', ''),
+        "swir2_s3_url": r.get('swir2_s3_url', ''),
+        "cloud_pct": r.get('cloud_pct'),
+        "tile_id": r.get('tile_id', ''),
+        "coverage_pct": r.get('coverage_pct', ''),
+    }
+
+
+@tool
+async def get_rasters_for_dates(location: str, date1_str: str, date2_str: str,
+                                geometry_s3_url: str = None, max_cloud: float = 30) -> str:
+    """Fetch Sentinel-2 imagery for TWO dates IN PARALLEL. Use this for change
+    detection / before-after comparisons instead of calling get_rasters twice — it
+    resolves the geometry once and fetches both dates concurrently (~2x faster).
+
+    Args:
+        location: Place name (for filenames)
+        date1_str: First date YYYY-MM-DD (END of 60-day search window, e.g. PRE-event)
+        date2_str: Second date YYYY-MM-DD (END of 60-day search window, e.g. POST-event)
+        geometry_s3_url: Boundary from find_location_boundary / get_best_geometry / create_bbox_from_coordinates
+        max_cloud: Max cloud % (default 30, retries at 80)
+
+    Returns: JSON {"date1": {...}, "date2": {...}} where each object has the same
+    fields as get_rasters (tci_s3_url, red_s3_url, green_s3_url, blue_s3_url,
+    nir_s3_url, nir08_s3_url, swir2_s3_url, date_used, cloud_pct). Feed the band URLs
+    straight into run_change_detection."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    logger.info(f"🔍 Fetching rasters for TWO dates in parallel: {date1_str} + {date2_str}")
+    _log_mem("get_rasters_for_dates:start")
+
+    # Resolve geometry once (shared, read-only, by both date fetches)
+    if geometry_s3_url:
+        aoi_gdf = download_geometry_from_s3(geometry_s3_url)
+    else:
+        geocode_result = json.loads(await find_location_boundary(location))
+        aoi_gdf = download_geometry_from_s3(geocode_result["geometry_s3_url"])
+
+    # Fetch both dates concurrently; each fetch also clips/uploads its bands in parallel.
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f1 = ex.submit(_fetch_and_map_rasters, aoi_gdf, location, date1_str, max_cloud)
+        f2 = ex.submit(_fetch_and_map_rasters, aoi_gdf, location, date2_str, max_cloud)
+        r1, r2 = f1.result(), f2.result()
+
+    missing = [d for d, r in ((date1_str, r1), (date2_str, r2)) if not r]
+    if missing:
+        return json.dumps({"error": f"No satellite images found for {location} on: {', '.join(missing)}"})
+
+    logger.info(f"✅ Both dates fetched in parallel: {r1['date_used']} + {r2['date_used']}")
+    _log_mem("get_rasters_for_dates:end")
+    return json.dumps({"date1": r1, "date2": r2})
+
+
 #####################################
 ### BANDMATH TOOLS
 #####################################

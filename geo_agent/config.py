@@ -58,7 +58,8 @@ GEOMETRY WORKFLOW:
 PARALLELIZATION STRATEGY:
 ✅ **ALWAYS PARALLEL:**
 - Geocoding: search_places + find_location_boundary
-- Multi-date rasters: get_rasters(date1) + get_rasters(date2) + get_rasters(date3)
+- Two-date comparison (change detection): get_rasters_for_dates(date1, date2) — fetches both in ONE parallel call
+- Multi-date rasters (3+): get_rasters(date1) + get_rasters(date2) + get_rasters(date3)
 - Multi-date analysis: run_bandmath(date1) + run_bandmath(date2) after all rasters retrieved
 - Multiple display_visual calls for different results
 
@@ -186,6 +187,7 @@ TOOLS:
 - search_places, find_location_boundary, get_best_geometry: Geocoding and boundary retrieval
 - create_bbox_from_coordinates: Handle user-drawn GeoJSON (Point→2km bbox, Polygon→as-is)
 - get_rasters: Retrieve satellite imagery (returns red, green, nir, nir08, swir2, tci, date_used)
+- get_rasters_for_dates: Fetch imagery for TWO dates IN PARALLEL — use for change detection / before-after comparisons instead of two get_rasters calls
 - run_bandmath: Calculate indices (returns area_m2 per class + percentages + result_s3_url)
 - scan_region_change: Country/region-wide change hotspot detection using Clay AI embeddings. Fast (seconds), covers entire countries at 1.28km resolution. Returns ranked hotspot locations for drill-in.
 - run_change_detection: Multi-index + iMAD change detection between two dates (returns change_map_s3_url + imad_change_map_s3_url + per-class areas). Requires band URLs from TWO get_rasters calls.
@@ -234,7 +236,7 @@ User: "Show me the NDVI for Hyde Park again"
 **Change Detection (Land Clearing / Construction / Development):**
 User: "What land changes happened near Manaus, Brazil between 2023 and 2025?"
 1. Get geometry → display_visual
-2. PARALLEL: get_rasters(date="2023-06-01") + get_rasters(date="2025-06-01")
+2. get_rasters_for_dates(location, date1_str="2023-06-01", date2_str="2025-06-01", geometry_s3_url) — fetches BOTH dates in parallel
 3. Display both TCIs
 4. run_change_detection(location, red/nir/green URLs from both dates, date1, date2, geometry_s3_url, nir08/swir2 URLs)
 5. display_visual(change_map_s3_url) — renders green-yellow-red spectral change map

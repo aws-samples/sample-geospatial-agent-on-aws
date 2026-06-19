@@ -30,7 +30,7 @@ from strands.session.s3_session_manager import S3SessionManager
 
 
 from utils.tools import (find_location_boundary, create_bbox_from_coordinates,
-                         get_best_geometry, get_rasters, run_bandmath,
+                         get_best_geometry, get_rasters, get_rasters_for_dates, run_bandmath,
                          display_visual, calculator, list_session_assets, calculate_environmental_impact,
                          run_change_detection, scan_region_change)
 from utils.scenario_loader import load_scenario, build_scenario_context
@@ -145,7 +145,7 @@ async def sat_image_analyzer_agent(payload, context=None):
             # Create agent with session manager, cached system prompt and langfuse trace attributes
             agent = Agent(
                 tools=mcp_tools + [find_location_boundary, create_bbox_from_coordinates,
-                                    get_best_geometry, get_rasters, run_bandmath, 
+                                    get_best_geometry, get_rasters, get_rasters_for_dates, run_bandmath, 
                                     display_visual, calculator, list_session_assets, 
                                     calculate_environmental_impact,
                                    run_change_detection]
