@@ -136,9 +136,10 @@ sed -i.bak \
 
 ### Step 5: Deploy Change Detection (optional)
 
-Enables region-wide change scanning using [LGND/Clay](https://source.coop/clay/lgnd-embeddings/) pre-computed embeddings.
+Enables region-wide change scanning using [LGND/Clay](https://source.coop/clay/lgnd-embeddings/) pre-computed embeddings. The Lambda deploys in us-west-2 (co-located with the data).
 
 ```bash
+cdk bootstrap aws://${AWS_ACCOUNT}/us-west-2
 cd ../frontend-cdk
 npx cdk deploy ChangeDetectionStack --require-approval never
 ```
