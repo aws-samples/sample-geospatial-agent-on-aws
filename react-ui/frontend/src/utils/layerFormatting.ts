@@ -64,6 +64,7 @@ export function cleanLayerName(name: string): string {
     .replace(/\s+NDVI\s+-\s+.*$/i, ' NDVI')
     .replace(/\s+NBR\s+-\s+.*$/i, ' NBR')
     .replace(/\s+NDWI\s+-\s+.*$/i, ' NDWI')
+    .replace(/\s+Change Detection\s+-\s+.*$/i, ' Change Detection')
     .trim();
   
   return cleaned;
@@ -74,7 +75,9 @@ export function cleanLayerName(name: string): string {
  */
 export function getFriendlyIndexName(name: string): string {
   const nameLower = name.toLowerCase();
-  if (nameLower.includes('ndvi')) {
+  if (nameLower.includes('change_detection') || nameLower.includes('change detection')) {
+    return 'Change Detection';
+  } else if (nameLower.includes('ndvi')) {
     return 'Vegetation Index';
   } else if (nameLower.includes('nbr')) {
     return 'Burn Rate';
@@ -85,13 +88,25 @@ export function getFriendlyIndexName(name: string): string {
 }
 
 /**
- * Check if a layer is a spectral index (NDVI, NBR, NDWI)
+ * Check if a layer is a change detection layer
+ */
+export function isChangeDetection(layer: LayerMetadata): boolean {
+  const nameLower = layer.name.toLowerCase();
+  const urlLower = (layer.url || '').toLowerCase();
+  return nameLower.includes('change detection') ||
+         nameLower.includes('change_detection') ||
+         urlLower.includes('change_detection');
+}
+
+/**
+ * Check if a layer is a spectral index (NDVI, NBR, NDWI) or change detection
  */
 export function isSpectralIndex(layer: LayerMetadata): boolean {
   const nameLower = layer.name.toLowerCase();
   return nameLower.includes('ndvi') ||
          nameLower.includes('nbr') ||
-         nameLower.includes('ndwi');
+         nameLower.includes('ndwi') ||
+         isChangeDetection(layer);
 }
 
 /**
@@ -117,6 +132,11 @@ export function formatLayerDisplayText(layer: LayerMetadata, layerType: 'tci' | 
  */
 export function groupLayers(layers: LayerMetadata[]) {
   return {
+    changeDetection: layers.filter(l =>
+      l.type === 'raster' &&
+      l.id !== BASEMAP_LAYER_ID &&
+      isChangeDetection(l)
+    ),
     tci: layers.filter(l =>
       l.type === 'raster' &&
       l.id !== BASEMAP_LAYER_ID &&
@@ -125,7 +145,8 @@ export function groupLayers(layers: LayerMetadata[]) {
     spectralIndices: layers.filter(l =>
       l.type === 'raster' &&
       l.id !== BASEMAP_LAYER_ID &&
-      isSpectralIndex(l)
+      isSpectralIndex(l) &&
+      !isChangeDetection(l)
     ),
     geometries: layers.filter(l => l.type === 'geometry'),
     basemap: layers.filter(l => l.id === BASEMAP_LAYER_ID),

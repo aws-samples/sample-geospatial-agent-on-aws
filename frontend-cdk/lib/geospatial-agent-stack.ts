@@ -278,7 +278,7 @@ export class GeospatialAgentStack extends cdk.Stack {
     const dockerImage = new ecr_assets.DockerImageAsset(this, 'AppImage', {
       directory: path.join(__dirname, '../../react-ui'),
       file: 'Dockerfile',
-      platform: ecr_assets.Platform.LINUX_AMD64,
+      platform: ecr_assets.Platform.LINUX_ARM64,
     });
 
     // ========================================
@@ -318,6 +318,10 @@ export class GeospatialAgentStack extends cdk.Stack {
       cpu: config.cpu,
       memoryLimitMiB: config.memoryLimitMiB,
       desiredCount: config.desiredCount,
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
       taskImageOptions: {
         image: ecs.ContainerImage.fromDockerImageAsset(dockerImage),
         containerName: 'app',
@@ -518,7 +522,12 @@ export class GeospatialAgentStack extends cdk.Stack {
         origin: new origins.LoadBalancerV2Origin(fargateService.loadBalancer, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           httpPort: 80,
+          // Raise origin response timeout to 60s (max without a quota increase).
+          // The agent can take >30s to produce its first chunk on a cold AgentCore
+          // session (fresh microVM booting heavy geo libraries). Combined with the
+          // backend's 10s SSE keepalive, this prevents CloudFront 504s on long scans.
           readTimeout: cdk.Duration.seconds(60),
+          keepaliveTimeout: cdk.Duration.seconds(60),
           customHeaders: {
             [customHeaderName]: customHeaderValue,
           },

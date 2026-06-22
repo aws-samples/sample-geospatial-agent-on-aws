@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand, StopRuntimeSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Readable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -20,6 +21,11 @@ const PORT = process.env.PORT || 3001;
 const agentRegion = process.env.AGENT_RUNTIME_ARN?.split(':')[3] || process.env.AWS_REGION || 'us-east-1';
 const bedrockClient = new BedrockAgentCoreClient({
   region: agentRegion,
+  requestHandler: new NodeHttpHandler({
+    requestTimeout: 300000,       // 5 min - total request timeout
+    connectionTimeout: 10000,     // 10s connection timeout
+    socketTimeout: 300000,        // 5 min - socket idle timeout (key for streaming)
+  }),
 });
 
 const s3Client = new S3Client({
@@ -96,6 +102,25 @@ app.post('/api/agent/invoke', async (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable proxy buffering
+
+  // Flush headers immediately so CloudFront sees the response has started,
+  // then write an initial comment byte. This is critical: the agent may take
+  // 30s+ to produce its first real chunk on a cold start (new AgentCore session
+  // = fresh microVM booting heavy geo libraries). CloudFront's origin response
+  // timeout (default 30s) is reset on every packet received, so we MUST start
+  // emitting keepalive bytes BEFORE awaiting bedrockClient.send().
+  res.flushHeaders();
+  res.write(`: connected\n\n`);
+
+  // Keepalive: send SSE comments every 10s to keep CloudFront's origin response
+  // timeout from firing while the agent boots / runs a long-scanning tool.
+  // Started here (before send) so cold starts don't blow past the 30s limit.
+  const keepaliveInterval = setInterval(() => {
+    if (!res.writableEnded) {
+      res.write(`: keepalive\n\n`);
+    }
+  }, 10000);
 
   try {
     const agentRuntimeArn = process.env.AGENT_RUNTIME_ARN;
@@ -112,12 +137,13 @@ app.post('/api/agent/invoke', async (req: Request, res: Response) => {
     }
 
     const input = {
-      runtimeSessionId: sessionId,  // Session ID (must be 33+ chars based on your example)
-      agentRuntimeArn: agentRuntimeArn,  // Full ARN
+      runtimeSessionId: sessionId,  // AgentCore requires the session ID to be at least 33 characters
+      agentRuntimeArn: agentRuntimeArn,  // Full AgentCore runtime ARN
       qualifier: 'DEFAULT',
       payload: new TextEncoder().encode(JSON.stringify(payloadData)),
     };
 
+    console.log(`📡 Sending InvokeAgentRuntimeCommand...`);
     const command = new InvokeAgentRuntimeCommand(input);
 
     // Retry logic for rate limiting
@@ -127,7 +153,9 @@ app.post('/api/agent/invoke', async (req: Request, res: Response) => {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        response = await bedrockClient.send(command);
+        response = await bedrockClient.send(command, {
+          requestTimeout: 300000,  // 5 min timeout for long tool executions
+        });
 
         if (attempt > 1) {
           console.log(`✅ Agent invocation succeeded on attempt ${attempt}/${maxRetries}`);
@@ -162,13 +190,21 @@ app.post('/api/agent/invoke', async (req: Request, res: Response) => {
 
       // The response is an SSE stream from Bedrock, similar to Python version
       let buffer = '';
+      let chunkCount = 0;
+      let totalBytes = 0;
 
       try {
         for await (const chunk of stream) {
           if (chunk) {
+            chunkCount++;
             // Decode the chunk
             const chunkText = typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+            totalBytes += chunkText.length;
             buffer += chunkText;
+
+            if (chunkCount <= 3 || chunkCount % 10 === 0) {
+              console.log(`📦 Chunk #${chunkCount}: ${chunkText.length} bytes (total: ${totalBytes})`);
+            }
 
             // Process complete lines (SSE format: "data: ...")
             const lines = buffer.split('\n');
@@ -192,14 +228,19 @@ app.post('/api/agent/invoke', async (req: Request, res: Response) => {
                     res.write(`data: ${JSON.stringify({ type: 'chunk', content: cleaned })}\n\n`);
                   }
                 }
+              } else if (line.trim() && !line.startsWith(':')) {
+                // Log non-empty, non-comment lines that aren't data: prefixed
+                console.log(`⚠️ Non-data SSE line: ${line.substring(0, 100)}`);
               }
             }
           }
         }
-        console.log('✅ Bedrock stream completed successfully');
+        console.log(`✅ Bedrock stream completed successfully (${chunkCount} chunks, ${totalBytes} bytes)`);
       } catch (streamError) {
-        console.error('❌ Error reading from Bedrock stream:', streamError);
+        console.error(`❌ Error reading from Bedrock stream after ${chunkCount} chunks, ${totalBytes} bytes:`, streamError);
         throw streamError;
+      } finally {
+        clearInterval(keepaliveInterval);
       }
 
       // Process any remaining data in buffer
@@ -224,6 +265,7 @@ app.post('/api/agent/invoke', async (req: Request, res: Response) => {
 
     // Send completion event
     console.log('📡 Sending done event to frontend');
+    clearInterval(keepaliveInterval);
     res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
     
     // Give the client time to receive and process the done event
@@ -235,11 +277,25 @@ app.post('/api/agent/invoke', async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('Error invoking agent:', error);
+    clearInterval(keepaliveInterval);
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
+
+    // Detect the AgentCore "runtime failed to start / crashed" condition.
+    // When a session's container crashes, that session is permanently poisoned
+    // and EVERY subsequent invoke on the same sessionId returns this error.
+    // We flag it so the frontend can recover by rotating to a fresh session.
+    const errName = (error as any)?.name || '';
+    const isRuntimeCrash =
+      errName === 'RuntimeClientError' ||
+      /starting the runtime|when starting the runtime|RuntimeClientError/i.test(errorMessage);
+
     // Only write if response is still writable
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ type: 'error', message: errorMessage })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        message: errorMessage,
+        ...(isRuntimeCrash ? { code: 'RUNTIME_CRASH' } : {}),
+      })}\n\n`);
       res.end();
     }
   }

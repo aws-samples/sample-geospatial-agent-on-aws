@@ -72,20 +72,6 @@ ENV DOCKER_CONTAINER=1
 ENV GDAL_CACHEMAX=256
 ENV GDAL_NUM_THREADS=2
 
-# Speed up Cloud-Optimized GeoTIFF reads over HTTP (/vsicurl). Without these,
-# GDAL issues extra directory-listing/probe requests on every COG open, which
-# adds seconds to each band clip, CRS probe, and change-detection read.
-#   - DISABLE_READDIR_ON_OPEN: skip the per-open directory listing (biggest win)
-#   - allowed extensions: don't probe for sidecar files, only GeoTIFFs
-#   - HTTP/2 multiplexing + range caching for fewer, faster round-trips
-ENV GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
-ENV CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif,.tiff,.TIF,.TIFF
-ENV GDAL_HTTP_MULTIPLEX=YES
-ENV GDAL_HTTP_VERSION=2
-ENV VSI_CACHE=TRUE
-ENV VSI_CACHE_SIZE=67108864
-ENV GDAL_INGESTED_BYTES_AT_OPEN=32768
-
 # Create non-root user
 RUN useradd -m -u 1000 bedrock_agentcore
 USER bedrock_agentcore

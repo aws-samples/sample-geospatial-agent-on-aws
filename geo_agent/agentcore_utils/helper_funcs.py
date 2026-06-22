@@ -18,6 +18,9 @@ def create_agentcore_role(agent_name: str, s3_bucket_name: str, region: str = No
         region = os.environ.get('AWS_DEFAULT_REGION') or os.environ.get('AWS_REGION') or Session().region_name
     
     account_id = boto3.client("sts").get_caller_identity()["Account"]
+    # Region where the lgnd-partition-query Lambda is deployed (LGND data
+    # region by default) so the invoke grant ARN targets the right function.
+    lgnd_lambda_region = os.environ.get("LGND_LAMBDA_REGION", "us-west-2")
     role_policy = {
         "Version": "2012-10-17",
         "Statement": [
@@ -139,6 +142,12 @@ def create_agentcore_role(agent_name: str, s3_bucket_name: str, region: str = No
                     "geo-places:Autocomplete"
                     ],
                 "Resource": "*"
+            },
+            {
+                "Sid": "LambdaInvokeForChangeDetection",
+                "Effect": "Allow",
+                "Action": "lambda:InvokeFunction",
+                "Resource": f"arn:aws:lambda:{lgnd_lambda_region}:{account_id}:function:lgnd-partition-query"
 		    }
         ]
     }

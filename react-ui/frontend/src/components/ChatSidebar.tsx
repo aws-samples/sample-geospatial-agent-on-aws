@@ -86,6 +86,17 @@ export function ChatSidebar({
     scenarioDisplayedRef.current = false;
     // Clear any cached raster URLs from previous session
     (window as any).__lastRasterUrls = '';
+
+    // If this session was created to recover from a runtime crash, show a
+    // friendly notice so the user knows what happened and that they can resend.
+    if ((window as any).__runtimeCrashRecovery) {
+      (window as any).__runtimeCrashRecovery = false;
+      setMessages([{
+        role: 'assistant',
+        content: '⚠️ The previous analysis session hit a runtime error and was ' +
+          'automatically reset. Please re-enter your request — it should work now.',
+      }]);
+    }
   }, [sessionId]);
 
   // Handle drawn geometry message from map
@@ -288,6 +299,22 @@ export function ChatSidebar({
           }
         } else if (event.type === 'error') {
           console.error('❌ Stream error from backend:', event.message);
+
+          // A RUNTIME_CRASH means the AgentCore container died and this session
+          // is now permanently poisoned — every further message on it returns the
+          // same error. Recover automatically by rotating to a fresh session so
+          // the user can simply resend, instead of the chat being bricked.
+          const isRuntimeCrash =
+            event.code === 'RUNTIME_CRASH' ||
+            /starting the runtime|RuntimeClientError/i.test(event.message || '');
+
+          if (isRuntimeCrash) {
+            console.warn('♻️ Runtime crash detected — rotating to a fresh session');
+            (window as any).__runtimeCrashRecovery = true;
+            onSessionReset();
+            return; // session reset; useEffect will seed a recovery notice
+          }
+
           setMessages((prev) => [
             ...prev,
             { role: 'assistant', content: `Error: ${event.message}` },

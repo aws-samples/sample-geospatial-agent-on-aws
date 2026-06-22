@@ -10,6 +10,12 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Raise the application's own module loggers (utils.*) to INFO so their
+# diagnostics — tool progress, memory instrumentation, and error context —
+# are captured to CloudWatch. The root stays at WARNING so noisy third-party
+# loggers (boto3, botocore, urllib3, rasterio) don't flood the logs.
+logging.getLogger("utils").setLevel(logging.INFO)
+
 from strands.telemetry import StrandsTelemetry
 
 # Import BedrockAgentCoreApp
@@ -24,10 +30,17 @@ from strands.session.s3_session_manager import S3SessionManager
 
 
 from utils.tools import (find_location_boundary, create_bbox_from_coordinates,
-                         get_best_geometry, get_rasters, run_bandmath,
-                         display_visual, calculator, list_session_assets, calculate_environmental_impact)
+                         get_best_geometry, get_rasters, get_rasters_for_dates, run_bandmath,
+                         display_visual, calculator, list_session_assets, calculate_environmental_impact,
+                         run_change_detection, scan_region_change)
 from utils.scenario_loader import load_scenario, build_scenario_context
 import config
+
+# The region-wide LGND embedding scan (scan_region_change) depends on the
+# lgnd-partition-query Lambda provisioned by the optional ChangeDetectionStack.
+# Only register the tool when explicitly enabled so the agent never advertises
+# a tool whose backing infrastructure may not be deployed. Off by default.
+LGND_EMBEDDINGS_ENABLED = os.environ.get("LGND_EMBEDDINGS_ENABLED", "false").lower() == "true"
 
 app = BedrockAgentCoreApp()
 
@@ -132,9 +145,11 @@ async def sat_image_analyzer_agent(payload, context=None):
             # Create agent with session manager, cached system prompt and langfuse trace attributes
             agent = Agent(
                 tools=mcp_tools + [find_location_boundary, create_bbox_from_coordinates,
-                                    get_best_geometry, get_rasters, run_bandmath, 
+                                    get_best_geometry, get_rasters, get_rasters_for_dates, run_bandmath, 
                                     display_visual, calculator, list_session_assets, 
-                                    calculate_environmental_impact],
+                                    calculate_environmental_impact,
+                                   run_change_detection]
+                                   + ([scan_region_change] if LGND_EMBEDDINGS_ENABLED else []),
                 model=bedrock_model,
                 system_prompt=system_content,
                 record_direct_tool_call=True,

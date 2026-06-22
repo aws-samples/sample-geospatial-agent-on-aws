@@ -93,13 +93,13 @@ echo ""
 
 # Synthesize CloudFormation template
 echo -e "${YELLOW}Synthesizing CloudFormation template...${NC}"
-npx cdk synth
+npx cdk synth --all
 echo -e "${GREEN}✓${NC} Template synthesized"
 echo ""
 
 # Show diff (optional)
 echo -e "${YELLOW}Checking for changes...${NC}"
-npx cdk diff || true
+npx cdk diff --all || true
 echo ""
 
 # Confirm deployment (unless auto-approve)
@@ -117,7 +117,7 @@ echo -e "${YELLOW}Deploying stack...${NC}"
 echo "This may take ~7 minutes..."
 echo ""
 
-npx cdk deploy \
+npx cdk deploy --all \
     -c agentRuntimeArn="$AGENT_RUNTIME_ARN" \
     -c s3BucketName="$S3_BUCKET_NAME" \
     -c awsRegion="${AWS_REGION:-us-east-1}" \

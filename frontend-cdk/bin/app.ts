@@ -2,6 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { GeospatialAgentStack } from '../lib/geospatial-agent-stack';
+import { ChangeDetectionStack } from '../lib/change-detection-stack';
 import { AwsSolutionsChecks } from 'cdk-nag';
 
 const app = new cdk.App();
@@ -24,6 +25,23 @@ const stack = new GeospatialAgentStack(app, stackName, {
     ManagedBy: 'CDK',
   },
   stackName,
+  environment,
+});
+
+// Optional stack for the region-wide change-scan feature (scan_region_change).
+// Deploy separately (`cdk deploy ChangeDetectionStack`) and set
+// LGND_EMBEDDINGS_ENABLED=true on the agent runtime to enable the feature.
+new ChangeDetectionStack(app, 'ChangeDetectionStack', {
+  // Deploy in the LGND data region (us-west-2) so the Lambda's parquet reads are
+  // local rather than cross-region. Override with LGND_LAMBDA_REGION if needed.
+  env: { account: env.account, region: process.env.LGND_LAMBDA_REGION || 'us-west-2' },
+  description: 'Optional LGND embedding Lambda for region-wide change scan',
+  tags: {
+    Project: 'GeospatialAgent',
+    Environment: environment,
+    ManagedBy: 'CDK',
+  },
+  stackName: 'ChangeDetectionStack',
   environment,
 });
 

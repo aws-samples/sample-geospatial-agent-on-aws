@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { MapView } from '../components/MapView';
@@ -58,14 +58,37 @@ export function Chat() {
   const [isLoadingScenario, setIsLoadingScenario] = useState(false);
   const [scenarioError, setScenarioError] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [mapReady, setMapReady] = useState(true); // Controls MapView render delay on scenario switch
+
+  // Track if this is the first run of the scenario effect
+  const isFirstScenarioLoad = useRef(true);
 
   // Load scenario when scenarioId is present
   useEffect(() => {
     if (!scenarioId) {
       setScenarioConfig(null);
       setScenarioError(null);
+      isFirstScenarioLoad.current = true;
       return;
     }
+
+    // Only reset state when SWITCHING scenarios (not on initial mount)
+    if (!isFirstScenarioLoad.current) {
+      // Unmount MapView first to release WebGL context
+      setMapReady(false);
+      setCurrentGeometry(null);
+      setCurrentRasters([]);
+      setScenarioConfig(null);
+      setDrawnGeometryMessage(null);
+      // Generate new sessionId (used as key for fresh MapView)
+      const newSessionId = uuidv4();
+      // Delay remount to give browser time to release WebGL resources
+      setTimeout(() => {
+        setSessionId(newSessionId);
+        setMapReady(true);
+      }, 100);
+    }
+    isFirstScenarioLoad.current = false;
 
     const loadScenario = async () => {
       setIsLoadingScenario(true);
@@ -299,11 +322,14 @@ export function Chat() {
           </button>
         )}
 
-        <MapView
-          geometry={currentGeometry}
-          rasters={currentRasters}
-          onDrawnGeometry={handleDrawnGeometry}
-        />
+        {mapReady && (
+          <MapView
+            key={sessionId}
+            geometry={currentGeometry}
+            rasters={currentRasters}
+            onDrawnGeometry={handleDrawnGeometry}
+          />
+        )}
       </div>
     </div>
   );

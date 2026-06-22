@@ -36,10 +36,20 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 export AWS_REGION
 export AWS_DEFAULT_REGION="${AWS_REGION}"
 
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ECR_SHORT_NAME="bedrock-agentcore-geospatial_agent_on_aws"
+ECR_REPO_NAME="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_SHORT_NAME}"
+
+# Ensure ECR repo exists (first deploy needs this)
+aws ecr describe-repositories --repository-names ${ECR_SHORT_NAME} --region ${AWS_REGION} >/dev/null 2>&1 || \
+  aws ecr create-repository --repository-name ${ECR_SHORT_NAME} --region ${AWS_REGION} >/dev/null 2>&1
+
 echo "Configuration:"
 echo "   S3 Bucket: ${S3_BUCKET_NAME}"
 echo "   Model: ${MODEL_ID}"
 echo "   Region: ${AWS_REGION}"
+echo "   ECR Repo: ${ECR_REPO_NAME}"
+echo "   LGND Embeddings: ${LGND_EMBEDDINGS_ENABLED:-false}"
 echo ""
 
 # Configure agent
@@ -48,9 +58,10 @@ agentcore configure \
     --deployment-type container \
     --entrypoint geospatial_agent_on_aws.py \
     --name geospatial_agent_on_aws \
+    --ecr ${ECR_REPO_NAME} \
     --execution-role "${AGENTCORE_ARN}" \
     --disable-memory \
-    --region "${AWS_REGION}" \
+    --disable-otel \
     --non-interactive
 
 # Restore Dockerfile
@@ -65,6 +76,7 @@ agentcore launch \
     --env "S3_BUCKET_NAME=${S3_BUCKET_NAME}" \
     --env "MODEL_ID=${MODEL_ID}" \
     --env "BEDROCK_MODEL_ID=${MODEL_ID}" \
+    --env "LGND_EMBEDDINGS_ENABLED=${LGND_EMBEDDINGS_ENABLED:-false}" \
     --auto-update-on-conflict
 
 echo ""

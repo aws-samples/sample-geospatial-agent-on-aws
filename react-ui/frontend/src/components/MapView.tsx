@@ -11,6 +11,7 @@ import {
   groupLayers,
   type LayerMetadata,
 } from '../utils/layerFormatting';
+import { CompareView } from './CompareView';
 
 interface MapViewProps {
   geometry: GeometryData | null;
@@ -29,6 +30,7 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
   const [drawMode, setDrawMode] = useState<'none' | 'point' | 'polygon'>('none');
   const [hasDrawnFeatures, setHasDrawnFeatures] = useState(false);
   const [baseMapStyle, setBaseMapStyle] = useState<'dark' | 'google-roads' | 'google-satellite' | 'esri-satellite'>('esri-satellite');
+  const [compareMode, setCompareMode] = useState<{ left: LayerMetadata; right: LayerMetadata; center?: [number, number]; zoom?: number } | null>(null);
 
   // Memoize layer groups to avoid repeated filtering on each render
   const layerGroups = useMemo(() => groupLayers(allLayers), [allLayers]);
@@ -142,6 +144,8 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
       },
       center: [0, 20],
       zoom: 2,
+      preserveDrawingBuffer: true,
+      failIfMajorPerformanceCaveat: false,
       transformRequest: (url) => {
         // Add API key for TiTiler requests
         if (url.startsWith(TITILER_URL) && TITILER_API_KEY) {
@@ -157,6 +161,21 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
     // Add global error listener
     map.current.on('error', (e) => {
       console.error('MapLibre error:', e);
+    });
+
+    // Handle WebGL context loss - recreate map if context can't be restored
+    const canvas = map.current.getCanvas();
+    
+    canvas.addEventListener('webglcontextlost', (e) => {
+      console.warn('⚠️ WebGL context lost');
+      e.preventDefault();
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      console.log('✅ WebGL context restored');
+      if (map.current) {
+        map.current.resize();
+        map.current.triggerRepaint();
+      }
     });
 
     // Load initial basemap (dynamic, controlled by baseMapStyle state)
@@ -237,134 +256,170 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
   useEffect(() => {
     console.log(`📍 MapView geometry effect triggered. Geometry:`, geometry ? 'present' : 'null', geometry?.locationName);
     
-    if (!map.current || !geometry) return;
+    // Use requestAnimationFrame to ensure the map canvas is ready
+    // before adding geometry. This avoids race conditions with map initialization.
+    requestAnimationFrame(() => {
+      if (!map.current || !geometry) return;
+      const currentMap = map.current;
+      
+      const doAdd = () => {
+        console.log(`📍 Processing geometry:`, geometry.locationName || 'unnamed');
+        
+        const timestamp = Date.now();
+        const geometryId = `geometry-${timestamp}`;
+        const fillLayerId = `${geometryId}-fill`;
+        const outlineLayerId = `${geometryId}-outline`;
+        
+        console.log(`➕ Adding new geometry to map`);
 
-    const mapInstance = map.current;
-
-    // Wait for map to load
-    const updateGeometry = () => {
-      console.log(`📍 Processing geometry:`, geometry.locationName || 'unnamed');
-      
-      // Generate unique geometry ID with timestamp
-      const timestamp = Date.now();
-      const geometryId = `geometry-${timestamp}`;
-      const fillLayerId = `${geometryId}-fill`;
-      const outlineLayerId = `${geometryId}-outline`;
-      
-      // Check if similar geometry already exists (compare first feature's coordinates)
-      const firstFeatureCoords = geometry.features[0]?.geometry?.coordinates;
-      const coordsStr = JSON.stringify(firstFeatureCoords);
-      const existingGeometry = allLayers.find(l => 
-        l.type === 'geometry' && l.url.includes(coordsStr.substring(0, 100))
-      );
-      
-      if (existingGeometry) {
-        console.log(`✅ Similar geometry already on map, skipping`);
-        return;
-      }
-      
-      console.log(`➕ Adding new geometry to map`);
-      
-      // Store full geometry for tracking
-      const geometryStr = JSON.stringify(geometry.features);
-
-      // Add source with unique ID
-      mapInstance.addSource(geometryId, {
-        type: 'geojson',
-        data: geometry,
-      });
-
-      // Add fill layer
-      mapInstance.addLayer({
-        id: fillLayerId,
-        type: 'fill',
-        source: geometryId,
-        paint: {
-          'fill-color': '#088',
-          'fill-opacity': 0,
-        },
-        layout: {
-          visibility: 'visible',
-        },
-      });
-
-      // Add outline layer
-      mapInstance.addLayer({
-        id: outlineLayerId,
-        type: 'line',
-        source: geometryId,
-        paint: {
-          'line-color': '#0FF',
-          'line-width': 3,
-        },
-        layout: {
-          visibility: 'visible',
-        },
-      });
-
-      // Extract layer name from geometry metadata or properties
-      let name = geometry.locationName || 'Boundary';
-      
-      // Fallback to properties if locationName not provided
-      if (!geometry.locationName && geometry.features.length > 0 && geometry.features[0].properties) {
-        const props = geometry.features[0].properties;
-        name = props.name || props.location || props.display_name || 
-               props.place_name || props.title || 'Boundary';
-      }
-      
-      // Calculate bounds and flyTo
-      const bounds = new maplibregl.LngLatBounds();
-      geometry.features.forEach((feature) => {
-        const geom = feature.geometry;
-        if (geom.type === 'Polygon') {
-          geom.coordinates[0].forEach((coord: number[]) => {
-            bounds.extend(coord as [number, number]);
+        try {
+          currentMap.addSource(geometryId, {
+            type: 'geojson',
+            data: geometry,
           });
-        } else if (geom.type === 'MultiPolygon') {
-          geom.coordinates.forEach((polygon: number[][][]) => {
-            polygon[0].forEach((coord: number[]) => {
-              bounds.extend(coord as [number, number]);
+
+          // Detect a change-scan layer: cells carry a numeric change_score.
+          // These render as a graduated density layer (green→red) with the
+          // top-N hotspots (tier === 'top') highlighted by a bold outline.
+          const isChangeScan = Array.isArray(geometry.features) &&
+            geometry.features.some((f: any) =>
+              f?.properties && typeof f.properties.change_score === 'number');
+
+          if (isChangeScan) {
+            currentMap.addLayer({
+              id: fillLayerId,
+              type: 'fill',
+              source: geometryId,
+              paint: {
+                'fill-color': [
+                  'interpolate', ['linear'], ['get', 'change_score'],
+                  0.0, '#1a9850',
+                  0.25, '#a6d96a',
+                  0.5, '#fee08b',
+                  0.75, '#fdae61',
+                  1.0, '#d73027',
+                ],
+                'fill-opacity': 0.5,
+              },
+              layout: { visibility: 'visible' },
             });
-          });
-        } else if (geom.type === 'Point') {
-          bounds.extend(geom.coordinates as [number, number]);
-        } else if (geom.type === 'LineString') {
-          geom.coordinates.forEach((coord: number[]) => {
-            bounds.extend(coord as [number, number]);
-          });
+            // Highlight ONLY the top-N hotspots with a bold, bright outline
+            currentMap.addLayer({
+              id: outlineLayerId,
+              type: 'line',
+              source: geometryId,
+              filter: ['==', ['get', 'tier'], 'top'],
+              paint: { 'line-color': '#00e5ff', 'line-width': 3 },
+              layout: { visibility: 'visible' },
+            });
+          } else {
+            // Boundary geometry: transparent fill + cyan outline (default)
+            currentMap.addLayer({
+              id: fillLayerId,
+              type: 'fill',
+              source: geometryId,
+              paint: { 'fill-color': '#088', 'fill-opacity': 0 },
+              layout: { visibility: 'visible' },
+            });
+
+            currentMap.addLayer({
+              id: outlineLayerId,
+              type: 'line',
+              source: geometryId,
+              paint: { 'line-color': '#0FF', 'line-width': 3 },
+              layout: { visibility: 'visible' },
+            });
+          }
+        } catch (err) {
+          console.error('❌ Error adding geometry to map:', err);
+          return;
         }
-      });
 
-      // Convert to [west, south, east, north] format for storage
-      const sw = bounds.getSouthWest();
-      const ne = bounds.getNorthEast();
-      const boundsArray: [number, number, number, number] = [sw.lng, sw.lat, ne.lng, ne.lat];
+        let name = geometry.locationName || 'Boundary';
+        if (!geometry.locationName && geometry.features.length > 0 && geometry.features[0].properties) {
+          const props = geometry.features[0].properties;
+          name = props.name || props.location || props.display_name || 
+                 props.place_name || props.title || 'Boundary';
+        }
+        
+        const bounds = new maplibregl.LngLatBounds();
+        let coordCount = 0;
+        geometry.features.forEach((feature) => {
+          const geom = feature.geometry;
+          if (!geom) return;
+          if (geom.type === 'Polygon') {
+            geom.coordinates[0].forEach((coord: number[]) => {
+              if (Array.isArray(coord) && coord.length >= 2) {
+                bounds.extend(coord as [number, number]);
+                coordCount++;
+              }
+            });
+          } else if (geom.type === 'MultiPolygon') {
+            geom.coordinates.forEach((polygon: number[][][]) => {
+              polygon[0].forEach((coord: number[]) => {
+                if (Array.isArray(coord) && coord.length >= 2) {
+                  bounds.extend(coord as [number, number]);
+                  coordCount++;
+                }
+              });
+            });
+          } else if (geom.type === 'Point') {
+            bounds.extend(geom.coordinates as [number, number]);
+            coordCount++;
+          } else if (geom.type === 'LineString') {
+            geom.coordinates.forEach((coord: number[]) => {
+              if (Array.isArray(coord) && coord.length >= 2) {
+                bounds.extend(coord as [number, number]);
+                coordCount++;
+              }
+            });
+          }
+        });
 
-      // Track this geometry layer with bounds
-      setAllLayers(prev => [...prev, {
-        id: fillLayerId,
-        sourceId: geometryId,
-        name: name,
-        url: geometryStr,
-        type: 'geometry',
-        bounds: boundsArray
-      }]);
-      
-      console.log(`✅ Geometry added:`, name);
+        // Guard against an empty/degenerate geometry: getSouthWest() throws on
+        // never-extended bounds (e.g. a FeatureCollection with no features),
+        // which previously crashed the whole map. Register the layer without
+        // bounds and skip fitBounds in that case.
+        if (coordCount === 0) {
+          console.warn(`⚠️ Geometry "${name}" has no usable coordinates; skipping fitBounds`);
+          setAllLayers(prev => [...prev, {
+            id: fillLayerId,
+            sourceId: geometryId,
+            name: name,
+            url: JSON.stringify(geometry.features).substring(0, 200),
+            type: 'geometry',
+            bounds: undefined
+          }]);
+          return;
+        }
 
-      mapInstance.fitBounds(bounds, {
-        padding: 50,
-        duration: 1500,
-        maxZoom: 15,
-      });
-    };
+        const sw = bounds.getSouthWest();
+        const ne = bounds.getNorthEast();
+        const boundsArray: [number, number, number, number] = [sw.lng, sw.lat, ne.lng, ne.lat];
 
-    if (mapInstance.loaded()) {
-      updateGeometry();
-    } else {
-      mapInstance.once('load', updateGeometry);
-    }
-  }, [geometry, allLayers]);
+        setAllLayers(prev => [...prev, {
+          id: fillLayerId,
+          sourceId: geometryId,
+          name: name,
+          url: JSON.stringify(geometry.features).substring(0, 200),
+          type: 'geometry',
+          bounds: boundsArray
+        }]);
+        
+        console.log(`✅ Geometry added:`, name, `bounds:`, boundsArray);
+
+        currentMap.fitBounds(bounds, { padding: 50, duration: 1500, maxZoom: 15 });
+        console.log(`🎯 fitBounds called`);
+      };
+
+      if (currentMap.isStyleLoaded()) {
+        doAdd();
+      } else {
+        currentMap.once('styledata', doAdd);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geometry]);
 
 
 
@@ -654,7 +709,10 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
           const urlLower = raster.url.toLowerCase();
           let tileUrl: string;
 
-          if (urlLower.includes('ndvi_') || urlLower.includes('ndvi-')) {
+          if (urlLower.includes('change_detection') || urlLower.includes('change-detection')) {
+            // Change Detection: 0 to 1 range, reversed RdYlGn (green=no change, red=high change)
+            tileUrl = `${TITILER_URL}/cog/tiles/WebMercatorQuad/{z}/{x}/{y}.png?url=${encodedUrl}&bidx=1&rescale=0,0.5&colormap_name=rdylgn_r`;
+          } else if (urlLower.includes('ndvi_') || urlLower.includes('ndvi-')) {
             // NDVI: 0 to 1 range, green colormap for vegetation
             tileUrl = `${TITILER_URL}/cog/tiles/WebMercatorQuad/{z}/{x}/{y}.png?url=${encodedUrl}&bidx=1&rescale=0,1&colormap_name=rdylgn`;
           } else if (urlLower.includes('ndwi_') || urlLower.includes('ndwi-')) {
@@ -674,11 +732,28 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
             break;
           }
 
+          // Calculate appropriate minzoom from bounds to prevent requesting tiles at
+          // zoom levels where the COG is too small relative to the tile extent.
+          // At low zooms, TiTiler times out trying to render a tiny COG into a world-scale tile.
+          let sourceMinZoom = 0;
+          if (bounds) {
+            const lonExtent = bounds[2] - bounds[0]; // east - west
+            // At zoom z, each tile covers 360/2^z degrees of longitude.
+            // We want the COG to fill at least ~10% of a tile before requesting.
+            for (let z = 0; z <= 18; z++) {
+              const tileLonExtent = 360 / Math.pow(2, z);
+              if (lonExtent / tileLonExtent > 0.1) {
+                sourceMinZoom = z;
+                break;
+              }
+            }
+          }
+
           mapInstance.addSource(sourceId, {
             type: 'raster',
             tiles: [tileUrl],
             tileSize: 256,
-            minzoom: 0,
+            minzoom: sourceMinZoom,
             maxzoom: 22,
             bounds: bounds,
           });
@@ -686,15 +761,25 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
           const isVisible = rasterVisibility[layerId] !== undefined ? rasterVisibility[layerId] : true;
           setRasterVisibility(prev => ({ ...prev, [layerId]: isVisible }));
 
-          // Find the first non-basemap raster layer to insert before it
-          // This ensures COG layers are added above basemaps but maintain their own zIndex order
+          // Find the correct insertion point for layer ordering
+          // Change detection layers go on TOP of all other rasters
+          // Other rasters (TCI, NDVI, etc.) go at the bottom of the COG stack
           const mapLayers = mapInstance.getStyle().layers || [];
           const basemapLayerIds = ['dark-base', 'google-roads-base', 'google-satellite-base', 'esri-satellite-base'];
-          const firstNonBasemapRaster = mapLayers.find((l: any) =>
-            l.type === 'raster' &&
-            !basemapLayerIds.includes(l.id)
-          );
-          const beforeId = firstNonBasemapRaster ? firstNonBasemapRaster.id : undefined;
+          const isChangeDetection = urlLower.includes('change_detection') || urlLower.includes('change-detection');
+
+          let beforeId: string | undefined;
+          if (isChangeDetection) {
+            // Change detection: add on top (no beforeId = top of stack)
+            beforeId = undefined;
+          } else {
+            // Other rasters: add above basemaps but below existing COG layers
+            const firstNonBasemapRaster = mapLayers.find((l: any) =>
+              l.type === 'raster' &&
+              !basemapLayerIds.includes(l.id)
+            );
+            beforeId = firstNonBasemapRaster ? firstNonBasemapRaster.id : undefined;
+          }
 
           // Add raster layer (above basemaps, beforeId places new layers at bottom of COG stack)
           mapInstance.addLayer({
@@ -797,6 +882,17 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* Compare overlay */}
+      {compareMode && (
+        <CompareView
+          leftLayer={compareMode.left}
+          rightLayer={compareMode.right}
+          bounds={compareMode.left.bounds || compareMode.right.bounds}
+          center={compareMode.center}
+          zoom={compareMode.zoom}
+          onClose={() => setCompareMode(null)}
+        />
+      )}
       <div
         ref={mapContainer}
         style={{
@@ -888,6 +984,82 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
                   minWidth: '250px',
                 }}
               >
+                {/* Change Detection - always at the top */}
+                {layerGroups.changeDetection.length > 0 && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ fontWeight: 500, fontSize: '14px', marginBottom: '8px', color: '#424242', marginTop: '12px' }}>
+                      Change Detection
+                    </div>
+                    {layerGroups.changeDetection.map((layer) => {
+                      const isVisible = rasterVisibility[layer.id] !== false;
+                      const displayText = formatLayerDisplayText(layer, 'spectral');
+
+                      return (
+                        <div
+                          key={layer.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontSize: '12px',
+                            marginBottom: '6px',
+                            paddingLeft: '6px',
+                            padding: '6px 8px',
+                            borderRadius: '4px',
+                            transition: 'background-color 200ms cubic-bezier(0.4, 0.0, 0.2, 1)',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.04)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isVisible}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              setRasterVisibility(prev => ({ ...prev, [layer.id]: e.target.checked }));
+                            }}
+                            style={{ cursor: 'pointer', width: '18px', height: '18px' }}
+                          />
+                          <span 
+                            style={{ flex: 1, fontWeight: 400, cursor: 'pointer', color: '#1C1B1F' }} 
+                            onClick={() => flyToLayer(layer.id)}
+                            title="Click to zoom to this layer"
+                          >
+                            {displayText}
+                          </span>
+                          <button
+                            onClick={() => removeLayer(layer.id)}
+                            style={{
+                              padding: '4px 8px',
+                              backgroundColor: '#000000',
+                              color: '#FFFFFF',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              fontSize: '12px',
+                              fontWeight: 500,
+                              transition: 'background-color 200ms cubic-bezier(0.4, 0.0, 0.2, 1)',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = '#424242';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = '#000000';
+                            }}
+                            title="Remove layer"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Satellite Images (TCI) - All rasters except basemap and spectral indices */}
                 {layerGroups.tci.length > 0 && (
                   <div style={{ marginBottom: '16px' }}>
@@ -961,6 +1133,34 @@ export function MapView({ geometry, rasters, onDrawnGeometry }: MapViewProps) {
                         </div>
                       );
                     })}
+                    {layerGroups.tci.length >= 2 && (
+                      <button
+                        onClick={() => {
+                          const sorted = [...layerGroups.tci].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+                          const currentMap = map.current;
+                          const center = currentMap ? currentMap.getCenter() : { lng: 0, lat: 20 };
+                          const zoom = currentMap ? currentMap.getZoom() : 2;
+                          setCompareMode({ left: sorted[0], right: sorted[sorted.length - 1], center: [center.lng, center.lat], zoom });
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '8px',
+                          marginTop: '4px',
+                          backgroundColor: '#1a73e8',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          transition: 'background-color 200ms',
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1557b0'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#1a73e8'; }}
+                      >
+                        Compare Imagery
+                      </button>
+                    )}
                   </div>
                 )}
 
