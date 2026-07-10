@@ -54,7 +54,7 @@ backoff==2.2.1
 
 # Web scraping and parsing
 beautifulsoup4==4.14.3
-soupsieve==2.8.1
+soupsieve==2.8.4
 markdownify==1.2.2
 chardet==5.2.0
 
