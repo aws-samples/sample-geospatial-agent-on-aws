@@ -912,6 +912,9 @@ async def scan_region_change(
     top_n: int = 20,
     geometry_s3_url: str = None,
     bbox: list = None,
+    min_change_score: float = 0.25,
+    min_separation_km: float = 3.0,
+    min_neighbors: int = 2,
 ) -> str:
     """Scan an entire country or large region for land surface change hotspots using Clay AI embeddings.
 
@@ -931,6 +934,17 @@ async def scan_region_change(
         year2: Later year (e.g. 2025)
         month2: Later month (1-12)
         top_n: Number of top hotspots to return (default 20)
+        min_change_score: Minimum change score (0-1) a cell must exceed to count as
+            changed (default 0.25). Higher = fewer, more confident changes and a more
+            credible "% changed" statistic; lower (e.g. 0.15) is more permissive.
+        min_separation_km: Spatially thin hotspots so each is at least this many km from
+            the others (default 3.0 ≈ 2 grid cells). Raise to ~8-10 for very spread-out,
+            distinct hotspots; set 0 to disable. Ranking is deterministic (change_score,
+            then similarity, then location), so the same top hotspots return every run.
+        min_neighbors: Coherence filter (default 2). A hotspot cell must have at least this
+            many changed neighbors (8-connected on the 1.28km grid), which drops isolated
+            single-cell hits that are usually cloud/edge noise rather than real change
+            fronts. Set 0 to disable.
         bbox: OPTIONAL [west, south, east, north] in degrees. PREFERRED way to scan a
             NAMED SUB-REGION (valley, basin, metro, mountain range): pass the area's
             approximate extent directly. Do NOT pass the parent state/country name.
@@ -1023,7 +1037,9 @@ async def scan_region_change(
             year2=year2,
             month2=month2,
             top_n=top_n,
-            min_change_score=0.15,
+            min_change_score=min_change_score,
+            min_separation_km=min_separation_km,
+            min_neighbors=min_neighbors,
         )
 
         if "error" in result:
