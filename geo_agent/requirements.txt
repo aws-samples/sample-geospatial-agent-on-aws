@@ -45,7 +45,7 @@ pystac==1.14.2
 pillow==11.3.0
 
 # MCP and tools
-mcp==1.25.0
+mcp==1.27.2
 loguru==0.7.3
 pydantic
 dill==0.4.0
