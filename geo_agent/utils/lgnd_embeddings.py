@@ -320,6 +320,73 @@ COUNTRY_BBOXES = {
 LAMBDA_FUNCTION_NAME = "lgnd-partition-query"
 
 
+def _build_coherence_check(cells, min_neighbors, center_fn):
+    """Return a predicate is_coherent(cell) -> bool.
+
+    A genuine change hotspot is part of a contiguous block of changed cells;
+    isolated single cells are usually cloud / edge / co-registration noise. This
+    requires a cell to have >= min_neighbors changed neighbors (8-connected on the
+    ~1.28km embedding grid). Uses an O(1) grid-hash lookup so it scales to large
+    scans. Returns an always-True predicate when min_neighbors <= 0 (filter off).
+    """
+    import math
+    if not min_neighbors or min_neighbors <= 0:
+        return lambda c: True
+    # Infer grid cell size (degrees) from a sample cell bbox.
+    dx = dy = None
+    for c in cells:
+        b = c.get("bbox")
+        if isinstance(b, dict):
+            w = abs(b.get("xmax", 0) - b.get("xmin", 0))
+            h = abs(b.get("ymax", 0) - b.get("ymin", 0))
+            if w > 0 and h > 0:
+                dx, dy = w, h
+                break
+    if not dx or not dy:
+        return lambda c: True
+
+    # Key on the cell's lower-left CORNER (a grid line), snapped with floor. Using
+    # the center would land on half-cell multiples and hit banker's-rounding
+    # ambiguity that misaligns neighbors; floor on the corner is stable and makes
+    # adjacent cells differ by exactly 1 in each axis regardless of grid origin.
+    def _key(b):
+        return (int(math.floor(b.get("xmin", 0) / dx + 1e-9)),
+                int(math.floor(b.get("ymin", 0) / dy + 1e-9)))
+
+    occupied = {}
+    for c in cells:
+        b = c.get("bbox")
+        if isinstance(b, dict):
+            k = _key(b)
+            occupied[k] = occupied.get(k, 0) + 1
+
+    def _check(c):
+        b = c.get("bbox")
+        if not isinstance(b, dict):
+            return True
+        kx, ky = _key(b)
+        n = 0
+        for ax in (-1, 0, 1):
+            for ay in (-1, 0, 1):
+                if ax == 0 and ay == 0:
+                    continue
+                n += occupied.get((kx + ax, ky + ay), 0)
+        return n >= min_neighbors
+
+    return _check
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lon/lat points."""
+    import math
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
 def _scan_with_lambda_fanout(
     geohashes: list[str],
     bbox: tuple[float, float, float, float],
@@ -328,6 +395,8 @@ def _scan_with_lambda_fanout(
     top_n: int,
     min_change_score: float,
     start_time: float,
+    min_separation_km: float = 0.0,
+    min_neighbors: int = 0,
 ) -> dict:
     """Fan out partition queries to Lambda functions for parallel execution.
 
@@ -398,34 +467,77 @@ def _scan_with_lambda_fanout(
         error_msg = f"No data found. Errors: {'; '.join(errors)}" if errors else "No matching cells"
         return {"error": error_msg, "query_time_s": round(query_time, 1)}
 
-    # Sort by change score and take top N
-    all_changed_cells.sort(key=lambda x: x.get("change_score", 0), reverse=True)
+    # Sort deterministically. change_score saturates at 1.0 for many cells, so a
+    # plain change_score sort leaves ties in non-deterministic Lambda-completion
+    # order (hotspots shuffle between runs). Break ties by:
+    #   1. change_score  (desc) — primary severity
+    #   2. similarity    (asc)  — lower cosine similarity = more semantically
+    #                             changed, a finer discriminator once score hits 1.0
+    #   3. center lat, lon (asc) — fully stable final tie-break
+    def _cell_center(c):
+        b = c.get("bbox") or {}
+        if isinstance(b, dict):
+            return ((b.get("ymin", 0) + b.get("ymax", 0)) / 2.0,
+                    (b.get("xmin", 0) + b.get("xmax", 0)) / 2.0)
+        return (0.0, 0.0)
 
-    # Apply land mask to top candidates only (efficient)
-    filtered_top = []
+    def _sort_key(c):
+        lat, lon = _cell_center(c)
+        return (-round(c.get("change_score", 0), 4),
+                round(c.get("similarity", 1.0), 6),
+                round(lat, 5), round(lon, 5))
+
+    all_changed_cells.sort(key=_sort_key)
+
+    # Coherence filter over the full changed-cell set (isolated cells are noise).
+    _is_coherent = _build_coherence_check(all_changed_cells, min_neighbors, _cell_center)
+
+    # Land-mask candidates. When thinning or coherence is active we must scan a
+    # generous pool (both drop candidates), otherwise the top-N*3 slice is enough.
+    use_full_pool = (min_separation_km and min_separation_km > 0) or (min_neighbors and min_neighbors > 0)
+    pool = all_changed_cells if use_full_pool else all_changed_cells[:top_n * 3]
+    land_cells = []
     ocean_removed = 0
-    for r in all_changed_cells[:top_n * 3]:
+    incoherent_removed = 0
+    for r in pool:
         cell_bbox = r.get("bbox")
-        if cell_bbox:
-            if isinstance(cell_bbox, dict):
-                cx = (cell_bbox.get("xmin", 0) + cell_bbox.get("xmax", 0)) / 2
-                cy = (cell_bbox.get("ymin", 0) + cell_bbox.get("ymax", 0)) / 2
-            else:
-                filtered_top.append(r)
-                continue
-            if _is_on_land(cx, cy):
-                filtered_top.append(r)
-            else:
+        if isinstance(cell_bbox, dict):
+            cx = (cell_bbox.get("xmin", 0) + cell_bbox.get("xmax", 0)) / 2
+            cy = (cell_bbox.get("ymin", 0) + cell_bbox.get("ymax", 0)) / 2
+            if not _is_on_land(cx, cy):
                 ocean_removed += 1
-        else:
-            filtered_top.append(r)
-        if len(filtered_top) >= top_n:
+                continue
+        if not _is_coherent(r):
+            incoherent_removed += 1
+            continue
+        land_cells.append(r)
+        # Fast path: stop early when not thinning and we have enough land cells.
+        if not (min_separation_km and min_separation_km > 0) and len(land_cells) >= top_n:
             break
 
     if ocean_removed > 0:
         print(f"🌊 Filtered {ocean_removed} ocean/water cells")
+    if incoherent_removed > 0:
+        print(f"🔎 Filtered {incoherent_removed} isolated (low-coherence) cells")
 
-    hotspots = filtered_top[:top_n]
+    # Optional spatial thinning: keep hotspots at least `min_separation_km` apart
+    # so the top-N are geographically DISTINCT events instead of a cluster of
+    # adjacent 1.28km cells (all saturating at change_score 1.0). Greedy over the
+    # deterministically-sorted list, so the strongest cell in each area wins.
+    if min_separation_km and min_separation_km > 0:
+        thinned, kept_centers = [], []
+        for r in land_cells:
+            lat, lon = _cell_center(r)
+            if all(_haversine_km(lat, lon, klat, klon) >= min_separation_km
+                   for klat, klon in kept_centers):
+                thinned.append(r)
+                kept_centers.append((lat, lon))
+            if len(thinned) >= top_n:
+                break
+        hotspots = thinned[:top_n]
+        print(f"📍 Spatial thinning: {len(hotspots)} distinct hotspots ≥{min_separation_km}km apart")
+    else:
+        hotspots = land_cells[:top_n]
 
     # Build hotspot list with coordinates
     hotspot_list = []
@@ -528,6 +640,8 @@ def scan_region_change(
     month2: int,
     top_n: int = 20,
     min_change_score: float = 0.15,
+    min_separation_km: float = 0.0,
+    min_neighbors: int = 0,
 ) -> dict:
     """Scan a large region for change hotspots using LGND embeddings.
 
@@ -581,4 +695,6 @@ def scan_region_change(
     return _scan_with_lambda_fanout(
         geohashes, bbox, year1, actual_month1, year2, actual_month2,
         top_n, min_change_score, start_time,
+        min_separation_km=min_separation_km,
+        min_neighbors=min_neighbors,
     )
