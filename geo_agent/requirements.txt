@@ -9,7 +9,7 @@ strands-agents[otel]==1.21.0
 strands-agents-tools==0.2.19
 
 # Bedrock AgentCore
-bedrock-agentcore==1.1.2
+bedrock-agentcore==1.18.1
 bedrock-agentcore-starter-toolkit==0.2.5
 
 # Observability - versions aligned with aws-opentelemetry-distro 0.16.0
