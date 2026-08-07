@@ -30,6 +30,7 @@ An AI agent that analyzes satellite imagery for any location on Earth using natu
 
 ```
 ├── geo_agent/           # Core AI agent (Python)
+├── api-cdk/             # REST API + MCP endpoint wrapper (CDK) — optional
 ├── react-ui/            # Web UI (React + Express)
 ├── frontend-cdk/        # UI infrastructure (CDK)
 ├── titiler-cdk/         # Tile server (CDK)
@@ -63,6 +64,7 @@ This guide walks through deploying all three components:
 1. **Geo Agent** — AgentCore agent with satellite analysis tools (~5 min)
 2. **TiTiler** — Satellite imagery tile server (~2 min)
 3. **React UI Frontend** — Web interface with authentication (~7 min)
+4. **REST API** *(optional)* — API Gateway wrapper for external integrations (~3 min)
 
 ### Initial Setup (run once)
 
@@ -295,6 +297,314 @@ cd frontend-cdk && ./scripts/diagnose.sh
 
 ---
 
+## Part 4: Deploy REST API (Optional)
+
+> **This is optional.** Deploy this if you want external systems (e.g., a data mesh or other services) to call the geospatial agent via a standard REST API instead of invoking AgentCore directly.
+
+The REST API wraps the AgentCore agent behind API Gateway + Lambda with an async job pattern. Consumers submit analysis requests and poll for results — no timeout constraints. Authentication uses API keys.
+
+This deployment also includes an **MCP (Model Context Protocol) endpoint** at `/mcp`, enabling AI agents and data mesh platforms to discover and invoke individual geospatial tools programmatically. See [MCP Endpoint](#mcp-endpoint) below.
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/analyze` | Submit an analysis job (returns immediately with a job ID) |
+| `GET` | `/jobs/{jobId}` | Poll for job status and results |
+| `GET` | `/capabilities` | List available analysis types and service metadata |
+| `POST` | `/mcp` | MCP JSON-RPC endpoint (initialize, tools/list, tools/call) |
+
+### API Contract
+
+#### POST /analyze
+
+Submits a satellite imagery analysis job. Returns immediately with a job ID.
+
+**Request:**
+
+```json
+{
+  "location": "Central Park, New York",
+  "analysisType": "NDVI",
+  "dateRange": {
+    "start": "2025-01-01",
+    "end": "2025-01-31"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `location` | string | yes | Location name or coordinates (e.g. `"Central Park, New York"` or `"41.37, 21.97"`) |
+| `analysisType` | string | yes | One of `"NDVI"` (vegetation), `"NDWI"` (water), `"NBR"` (burn severity) |
+| `dateRange` | object | no | `{ "start": "ISO date", "end": "ISO date" }` — defaults to most recent imagery |
+
+**Response (202 Accepted):**
+
+```json
+{
+  "jobId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "PENDING",
+  "message": "Analysis submitted. Poll GET /jobs/{jobId} for results."
+}
+```
+
+#### GET /jobs/{jobId}
+
+Poll for job status and results.
+
+**Response (PENDING/RUNNING):**
+
+```json
+{
+  "jobId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "RUNNING"
+}
+```
+
+**Response (COMPLETED):**
+
+```json
+{
+  "jobId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "COMPLETED",
+  "result": {
+    "location": "Central Park, New York",
+    "analysisType": "NDVI",
+    "date": "2025-01-15",
+    "textAnalysis": "Vegetation health is moderate across the park...",
+    "statistics": {
+      "classes": [
+        { "name": "Dense Vegetation", "area_m2": 120000, "percentage": 45.2 },
+        { "name": "Sparse Vegetation", "area_m2": 80000, "percentage": 30.1 }
+      ],
+      "meanIndex": 0.42,
+      "medianIndex": 0.38
+    },
+    "imageUrls": {
+      "trueColor": "https://s3.amazonaws.com/...",
+      "indexMap": "https://s3.amazonaws.com/...",
+      "boundary": "https://s3.amazonaws.com/..."
+    },
+    "metadata": {
+      "satellite": "Sentinel-2",
+      "resolution": "10m",
+      "cloudCoverage": 12.5,
+      "source": "Copernicus / ESA"
+    }
+  }
+}
+```
+
+**Response (FAILED):**
+
+```json
+{
+  "jobId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "FAILED",
+  "error": "Unable to process location 'xyznonexistent'"
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| `PENDING` | Job submitted, waiting to start |
+| `RUNNING` | Agent is processing the analysis |
+| `COMPLETED` | Results available in `result` field |
+| `FAILED` | Error occurred, details in `error` field |
+
+#### GET /capabilities
+
+Returns available analysis types and service metadata.
+
+**Response:**
+
+```json
+{
+  "analysisTypes": [
+    { "id": "NDVI", "name": "Vegetation Health", "description": "Normalized Difference Vegetation Index" },
+    { "id": "NDWI", "name": "Water Detection", "description": "Normalized Difference Water Index" },
+    { "id": "NBR", "name": "Burn Severity", "description": "Normalized Burn Ratio" }
+  ],
+  "satellite": "Sentinel-2",
+  "coverage": "global",
+  "temporalRange": "60 days rolling",
+  "resolution": "10m"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `analysisTypes` | array | Available analysis types with id, name, and description |
+| `satellite` | string | Satellite source (`"Sentinel-2"`) |
+| `coverage` | string | Geographic coverage (`"global"`) |
+| `temporalRange` | string | How far back imagery is available (`"60 days rolling"`) |
+| `resolution` | string | Spatial resolution (`"10m"`) |
+
+**What gets deployed:** API Gateway REST API with API key auth, a DynamoDB table for job tracking, two Lambda functions (API handler + async worker), and IAM roles scoped to your agent.
+
+### Step 1: Configure
+
+> **Prerequisite:** The shell variables below must be set before running the `sed` command. If you deployed Parts 1–3 in the same terminal session, they're already set. If not, re-export them first:
+>
+> ```bash
+> export AGENT_RUNTIME_ARN=$(cd ../geo_agent && grep agent_arn .bedrock_agentcore.yaml | awk '{print $2}')
+> export S3_BUCKET_NAME=$(grep '^S3_BUCKET_NAME=' ../geo_agent/.env | cut -d= -f2)
+> ```
+
+```bash
+cd api-cdk
+cp .env.example .env
+
+# Auto-populate from shell variables
+sed -i.bak \
+  -e "s|AGENT_RUNTIME_ARN=.*|AGENT_RUNTIME_ARN=${AGENT_RUNTIME_ARN}|" \
+  -e "s|S3_BUCKET_NAME=.*|S3_BUCKET_NAME=${S3_BUCKET_NAME}|" \
+  .env && rm -f .env.bak
+
+# Verify values were populated
+cat .env
+```
+
+### Step 2: Deploy
+
+```bash
+./deploy.sh
+```
+
+The script installs dependencies, bootstraps CDK if needed, and deploys the stack. On success it prints the API URL and API Key ID.
+
+### Step 3: Retrieve API Key
+
+```bash
+API_URL=$(aws cloudformation describe-stacks \
+  --stack-name GeospatialAgentApiStack --region ${AWS_REGION} \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text)
+
+API_KEY_ID=$(aws cloudformation describe-stacks \
+  --stack-name GeospatialAgentApiStack --region ${AWS_REGION} \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' --output text)
+
+API_KEY=$(aws apigateway get-api-key \
+  --api-key ${API_KEY_ID} --include-value \
+  --query 'value' --output text --region ${AWS_REGION})
+
+echo "API URL: $API_URL"
+echo "API Key: $API_KEY"
+```
+
+### Step 4: Test
+
+```bash
+# Check capabilities
+curl -s -H "x-api-key: ${API_KEY}" ${API_URL}capabilities | jq .
+
+# Submit an analysis job (returns immediately with a job ID)
+JOB=$(curl -s -X POST -H "x-api-key: ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"location": "Central Park, New York", "analysisType": "NDVI"}' \
+  ${API_URL}analyze)
+echo $JOB | jq .
+JOB_ID=$(echo $JOB | jq -r '.jobId')
+
+# Poll for results (repeat until status is COMPLETED or FAILED)
+curl -s -H "x-api-key: ${API_KEY}" ${API_URL}jobs/${JOB_ID} | jq .
+```
+
+> **Polling:** The analysis typically takes 1–3 minutes. Poll `GET /jobs/{jobId}` every 10–15 seconds. Status transitions: `PENDING` → `RUNNING` → `COMPLETED` (or `FAILED`). Results include text analysis, area statistics, and presigned image URLs (valid for 1 hour).
+
+### MCP Endpoint
+
+The same deployment exposes an MCP (Model Context Protocol) endpoint at `POST /mcp`. This allows AI agents and data mesh platforms to discover and invoke individual geospatial tools via the standard MCP JSON-RPC protocol.
+
+**Authentication:** Uses a separate API Gateway API key (`geospatial-agent-mcp-api-key`), included in the same usage plan. The key value is automatically stored in SSM at `/geospatial-agent/mcp-api-key` during deployment.
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `search_places` | Geocode location names — returns coordinates, addresses, and place metadata |
+| `find_location_boundary` | Get precise boundary polygons from OpenStreetMap |
+| `get_rasters` | Fetch Sentinel-2 satellite imagery bands (TCI, NIR, RED, SWIR2) |
+| `run_bandmath` | Calculate spectral indices (NDVI, NDWI, NBR) with statistics |
+| `display_visual` | Display geometry or imagery on a map |
+
+#### Retrieve MCP credentials
+
+```bash
+# MCP endpoint URL
+MCP_URL=$(aws cloudformation describe-stacks \
+  --stack-name GeospatialAgentApiStack --region ${AWS_REGION} \
+  --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' --output text)
+
+# MCP API key (from SSM — written there automatically by CDK)
+MCP_API_KEY=$(aws ssm get-parameter \
+  --name /geospatial-agent/mcp-api-key \
+  --with-decryption --query 'Parameter.Value' --output text \
+  --region ${AWS_REGION})
+
+echo "MCP URL: $MCP_URL"
+```
+
+#### Test MCP endpoint
+
+```bash
+# Initialize (MCP handshake)
+curl -s -X POST -H "x-api-key: ${MCP_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":"1"}' \
+  ${MCP_URL} | jq .
+
+# List available tools
+curl -s -X POST -H "x-api-key: ${MCP_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":"2"}' \
+  ${MCP_URL} | jq .
+
+# Call a tool (search for a location)
+curl -s -X POST -H "x-api-key: ${MCP_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"search_places","arguments":{"query":"Central Park, New York"}},"id":"3"}' \
+  ${MCP_URL} | jq .
+```
+
+#### Register with a data mesh
+
+To register this MCP endpoint as a supplier in the ADSE Data Mesh:
+
+```bash
+# Read the MCP API key from SSM
+MCP_API_KEY=$(aws ssm get-parameter \
+  --name /geospatial-agent/mcp-api-key \
+  --with-decryption --query 'Parameter.Value' --output text \
+  --region ${AWS_REGION})
+
+# Register as an MCP supplier product
+curl -s -X POST -H "x-api-key: ${SUPPLIER_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sentinel_2_geospatial_tools",
+    "description": "Sentinel-2 satellite imagery analysis tools — search places, get imagery, calculate spectral indices (NDVI/NDWI/NBR), and visualize results",
+    "classificationLevel": "UNCLASSIFIED",
+    "releasability": "UNRESTRICTED",
+    "mettcCategory": ["terrain"],
+    "militaryDomain": "geospatial",
+    "dataType": "mcp",
+    "mcpEndpointUrl": "'${MCP_URL}'",
+    "mcpAuthType": "api_key",
+    "mcpApiKey": "'${MCP_API_KEY}'"
+  }' \
+  ${MESH_API_URL}/suppliers/products | jq .
+```
+
+The mesh will store the API key in its own SSM, discover the available tools via `tools/list`, and make them available to subscribed consumers through the mesh's MCP proxy with full governance (DCS, audit, subscription checks).
+
+```bash
+cd ..
+```
+
+---
+
 ## Local Development (React UI)
 
 For local development without deploying to AWS:
@@ -365,6 +675,8 @@ The agent has access to these tools for geospatial analysis:
 - **React UI**: See `react-ui/README.md` for frontend architecture details
 - **Frontend CDK**: See `frontend-cdk/README.md` for deployment and authentication
 - **TiTiler**: See `titiler-cdk/README.md` for tile server deployment
+- **REST API**: See `api-cdk/` for the optional API Gateway wrapper (Part 4)
+- **MCP Endpoint**: Included in Part 4 — see [MCP Endpoint](#mcp-endpoint) for tool discovery and invocation via MCP protocol
 - **Use Cases**: See `use-cases/README.md` for creating custom scenarios
 
 ## Authors

@@ -14,10 +14,10 @@ S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 if not S3_BUCKET_NAME:
     raise ValueError("S3_BUCKET_NAME environment variable is required")
 
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
 
 # Bedrock Model Configuration
-MODEL_ID = os.getenv("MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+MODEL_ID = os.getenv("MODEL_ID", "eu.anthropic.claude-sonnet-4-6")
 MODEL_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE", "0.1"))
 MODEL_COSTS = { #see here: https://aws.amazon.com/bedrock/pricing/
             "input": 0.003/1000,

@@ -1,0 +1,29 @@
+{
+  "name": "geospatial-agent-api-cdk",
+  "version": "0.1.0",
+  "description": "CDK stack for Geospatial Agent REST API wrapper",
+  "bin": {
+    "cdk-stack": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy": "cdk deploy",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "destroy": "cdk destroy"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.9",
+    "aws-cdk": "^2.189.1",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.5.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.189.1",
+    "constructs": "^10.0.0",
+    "dotenv": "^16.4.5",
+    "source-map-support": "^0.5.21"
+  }
+}
