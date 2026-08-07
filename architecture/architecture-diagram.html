@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<title>Geospatial Agent on AWS — Architecture</title>
+<!--
+  Layout: HTML (inside <foreignObject>) for cluster contents; SVG for outlines + flow paths.
+  Flow paths are auto-routed by JS from anchor element positions, so moving a node
+  in CSS does not require touching the SVG.
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0e1a;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ─── Header ─── */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 32px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    background: rgba(10,14,26,0.95);
+    backdrop-filter: blur(10px);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; color: #f0f0f0; }
+  .header h1 span { color: #FF9900; }
+  .header .subtitle { font-size: 12px; color: #6b7280; margin-top: 2px; }
+  .badge {
+    display: inline-block; padding: 4px 12px; border-radius: 12px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+  }
+  .badge-prod { background: rgba(0,200,150,0.12); color: #00c896; border: 1px solid rgba(0,200,150,0.25); }
+  .badge-region { background: rgba(255,153,0,0.1); color: #FF9900; border: 1px solid rgba(255,153,0,0.2); margin-left: 8px; }
+
+  .container { max-width: 1400px; margin: 0 auto; padding: 32px; }
+
+  svg.diagram { display: block; width: 100%; height: auto; }
+
+  /* ─── SVG flow path styles + arrowheads ─── */
+  .flow-path { fill: none; stroke-width: 2; stroke-linecap: round; }
+  .flow-green  { stroke: #00e68a; stroke-dasharray: 8 6; animation: dash-flow 0.8s linear infinite; filter: drop-shadow(0 0 3px rgba(0,230,138,0.4));  marker-end: url(#arrow-green); }
+  .flow-cyan   { stroke: #00d4ff; stroke-dasharray: 8 6; animation: dash-flow 1.0s linear infinite; filter: drop-shadow(0 0 3px rgba(0,212,255,0.4));  marker-end: url(#arrow-cyan); }
+  .flow-orange { stroke: #FF9900; stroke-dasharray: 8 6; animation: dash-flow 0.9s linear infinite; filter: drop-shadow(0 0 3px rgba(255,153,0,0.4));  marker-end: url(#arrow-orange); }
+  .flow-purple { stroke: #b57aff; stroke-dasharray: 8 6; animation: dash-flow 1.1s linear infinite; filter: drop-shadow(0 0 3px rgba(181,122,255,0.3)); marker-end: url(#arrow-purple); }
+  .flow-yellow { stroke: #ffcc33; stroke-dasharray: 8 6; animation: dash-flow 1.0s linear infinite; filter: drop-shadow(0 0 3px rgba(255,204,51,0.35)); marker-end: url(#arrow-yellow); }
+  .flow-red    { stroke: #ff6b6b; stroke-dasharray: 6 8; animation: dash-flow 1.2s linear infinite; filter: drop-shadow(0 0 3px rgba(255,107,107,0.3)); marker-end: url(#arrow-red); }
+  @keyframes dash-flow { to { stroke-dashoffset: -28; } }
+
+  .flow-label {
+    font: 600 9px 'Segoe UI', sans-serif;
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: #0a0e1a; stroke-width: 3; stroke-linejoin: round;
+  }
+  .flow-label.lab-green  { fill: #00e68a; }
+  .flow-label.lab-cyan   { fill: #00d4ff; }
+  .flow-label.lab-orange { fill: #FF9900; }
+  .flow-label.lab-purple { fill: #b57aff; }
+  .flow-label.lab-yellow { fill: #ffcc33; }
+  .flow-label.lab-red    { fill: #ff6b6b; }
+
+  /* ─── Cluster outline (dashed border behind foreignObject content) ─── */
+  .cluster-outline {
+    fill: none; stroke-width: 1.5; stroke-dasharray: 6 4; rx: 8;
+  }
+  .out-edge     { stroke: rgba(0,212,255,0.30); }
+  .out-vpc      { stroke: rgba(0,230,138,0.25); }
+  .out-agent    { stroke: rgba(181,122,255,0.35); }
+  .out-storage  { stroke: rgba(255,153,0,0.25); }
+  .out-tile     { stroke: rgba(255,204,51,0.30); }
+  .out-external { stroke: rgba(255,107,107,0.25); }
+
+  .cluster-label-svg {
+    font: 600 11px 'Segoe UI', sans-serif;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    paint-order: stroke; stroke: #0a0e1a; stroke-width: 4; stroke-linejoin: round;
+  }
+  .cb-edge     { fill: rgba(0,212,255,0.6); }
+  .cb-vpc      { fill: rgba(0,230,138,0.5); }
+  .cb-agent    { fill: rgba(181,122,255,0.65); }
+  .cb-storage  { fill: rgba(255,153,0,0.55); }
+  .cb-tile     { fill: rgba(255,204,51,0.7); }
+  .cb-external { fill: rgba(255,107,107,0.55); }
+
+  .cluster-num-circle { stroke-width: 1; }
+  .cluster-num-text { font: 700 12px 'Segoe UI', sans-serif; text-anchor: middle; dominant-baseline: central; }
+
+  /* ─── HTML cluster content (inside foreignObject) ─── */
+  .ct {
+    box-sizing: border-box;
+    width: 100%; height: 100%;
+    padding: 22px 14px 14px;
+    display: flex; flex-direction: column; gap: 10px;
+    color: #e0e0e0;
+  }
+  .ct .row { display: flex; gap: 10px; }
+  .ct .row.center { justify-content: center; }
+  .ct .row.equal > * { flex: 1; }
+  .ct .col { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+
+  /* Node card */
+  .node {
+    background: rgba(20,25,45,0.9);
+    border: 1.5px solid;
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex; gap: 10px; align-items: flex-start;
+    transition: filter 0.2s ease;
+    min-width: 0;
+  }
+  .node:hover { filter: brightness(1.4) drop-shadow(0 0 6px rgba(255,255,255,0.08)); }
+  .node img { width: 28px; height: 28px; flex-shrink: 0; }
+  .node .meta { min-width: 0; flex: 1; }
+  .node .title { font-size: 11px; font-weight: 600; color: #f0f0f0; line-height: 1.3; }
+  .node .detail { font-size: 9px; color: #8892a8; line-height: 1.4; margin-top: 2px; }
+
+  .node.compact { padding: 6px 10px; }
+  .node.compact img { width: 22px; height: 22px; }
+  .node.compact .title { font-size: 10px; }
+  .node.compact .detail { font-size: 8.5px; }
+
+  /* Border colors by node category */
+  .n-edge     { border-color: rgba(0,212,255,0.5); }
+  .n-compute  { border-color: rgba(0,230,138,0.5); }
+  .n-agent    { border-color: rgba(181,122,255,0.6); }
+  .n-storage  { border-color: rgba(255,153,0,0.5); }
+  .n-tile     { border-color: rgba(255,204,51,0.55); }
+  .n-external { border-color: rgba(255,107,107,0.5); }
+  .n-auth     { border-color: rgba(255,200,50,0.5); }
+
+  /* Pill (smaller chip used inside ECS Fargate, AgentCore tools row) */
+  .pill {
+    background: rgba(50,30,80,0.7);
+    border: 1px solid rgba(181,122,255,0.45);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 9px; color: #d4b8ff;
+    text-align: center; white-space: nowrap;
+  }
+  .pill.compute {
+    background: rgba(0,230,138,0.12);
+    border-color: rgba(0,230,138,0.4);
+    color: #cfeacb;
+  }
+  .pill-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* Section heading inside a cluster */
+  .section-head {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    color: #b57aff; margin-top: 2px;
+  }
+  .section-head.purple   { color: #b57aff; }
+  .section-head.orange   { color: rgba(255,153,0,0.85); }
+  .section-head.yellow   { color: rgba(255,204,51,0.85); }
+
+  /* Strands inner sub-row (purple stages) */
+  .agent-stage {
+    background: rgba(50,30,80,0.7);
+    border: 1px solid rgba(181,122,255,0.5);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 9px; color: #d4b8ff; text-align: center;
+  }
+  .agent-card {
+    background: rgba(30,20,55,0.85);
+    border: 1px solid rgba(181,122,255,0.4);
+    border-radius: 5px;
+    padding: 10px;
+  }
+  .agent-card.active {
+    background: rgba(50,30,80,0.9);
+    border-color: rgba(181,122,255,0.7);
+    border-width: 1.5px;
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+  .agent-card .head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .agent-card .head img { width: 22px; height: 22px; }
+  .agent-card .head .label { font-size: 11px; font-weight: 700; color: #e0c0ff; }
+  .agent-card .sub { font-size: 9px; color: #a48bd0; line-height: 1.4; margin-bottom: 6px; }
+  .agent-card .stages { display: flex; flex-direction: column; gap: 4px; }
+  @keyframes pulse-glow { 0%,100%{box-shadow: 0 0 0 0 rgba(181,122,255,0.0);} 50%{box-shadow:0 0 12px 0 rgba(181,122,255,0.35);} }
+
+  /* S3 prefix bars */
+  .pref { padding: 6px 10px; border-radius: 3px; font-size: 9px; font-weight: 600; line-height: 1.3; }
+  .pref-sessions   { background: rgba(255,153,0,0.18); border: 1px solid rgba(255,153,0,0.5);  color: #ffd699; }
+  .pref-rasters    { background: rgba(255,153,0,0.13); border: 1px solid rgba(255,153,0,0.4);  color: #ffd699; }
+  .pref-geometries { background: rgba(255,153,0,0.10); border: 1px solid rgba(255,153,0,0.35); color: #ffd699; }
+  .pref-usecases   { background: rgba(255,107,107,0.10); border: 1px solid rgba(255,107,107,0.35); color: #ffaaaa; }
+
+  /* Captions */
+  .caption { font-size: 9px; color: #6b7280; line-height: 1.5; }
+  .caption.tiny { font-size: 8.5px; }
+
+  /* ─── Stats bar / legend ─── */
+  .legend {
+    display: flex; gap: 24px; padding: 12px 20px;
+    background: rgba(20,25,45,0.6);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; margin-top: 24px; flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #8892a8; }
+  .legend-dash {
+    background: repeating-linear-gradient(90deg, currentColor 0 6px, transparent 6px 10px);
+    height: 2px; width: 28px;
+  }
+
+  .stats-bar { display: flex; gap: 2px; margin-top: 24px; flex-wrap: wrap; }
+  .stat-card {
+    flex: 1; min-width: 140px; padding: 16px 20px;
+    background: rgba(20,25,45,0.7);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; text-align: center;
+  }
+  .stat-card .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+  .stat-card .label { font-size: 10px; color: #6b7280; margin-top: 4px; letter-spacing: 0.05em; text-transform: uppercase; }
+
+  /* Fade-in */
+  @keyframes fade-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fade-up 0.6s ease-out forwards; }
+  .fade-in-2 { animation-delay: 0.3s; opacity: 0; }
+  .fade-in-3 { animation-delay: 0.5s; opacity: 0; }
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Geospatial <span>Agent</span> on AWS — Architecture</h1>
+    <div class="subtitle">Natural-language Sentinel-2 analysis · Strands · AgentCore · Claude Sonnet · MapLibre</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <button onclick="document.documentElement.requestFullscreen?document.documentElement.requestFullscreen():0" title="Enter fullscreen (F11)" style="
+      padding:6px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);
+      background:rgba(255,255,255,0.04);color:#8892a8;font-size:12px;
+      cursor:pointer;transition:all 0.2s;
+    " onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.04)'"><i class="fa-solid fa-expand"></i></button>
+    <button id="explainBtn" onclick="startExplain()" style="
+      padding:6px 16px;border-radius:6px;border:1px solid rgba(181,122,255,0.4);
+      background:rgba(181,122,255,0.1);color:#b57aff;font-size:12px;font-weight:600;
+      cursor:pointer;letter-spacing:0.03em;transition:all 0.2s;
+    " onmouseover="this.style.background='rgba(181,122,255,0.25)'" onmouseout="this.style.background='rgba(181,122,255,0.1)'">▶ Explain</button>
+    <span class="badge badge-prod">● Demo</span>
+    <span class="badge badge-region">us-east-1</span>
+  </div>
+</div>
+
+<!-- ═══════ SLIDESHOW OVERLAY ═══════ -->
+<div id="slideshow" style="display:none;position:fixed;inset:0;z-index:200;background:#0a0e1a;">
+  <div style="display:flex;height:100vh;">
+    <div id="slideLeft" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:32px;">
+      <svg id="slideSvg" viewBox="0 0 1340 820" style="width:100%;height:100%;transition:viewBox 0.6s ease;" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div id="slideRight" style="
+      width:440px;padding:48px 48px 32px 40px;overflow-y:auto;
+      border-left:1px solid rgba(255,255,255,0.06);
+      display:flex;flex-direction:column;justify-content:center;
+    ">
+      <div id="slideStep" style="font-size:13px;color:#6b7280;margin-bottom:8px;letter-spacing:0.1em;text-transform:uppercase;"></div>
+      <div id="slideTitle" style="font-size:24px;font-weight:700;color:#f0f0f0;margin-bottom:16px;letter-spacing:-0.02em;"></div>
+      <ul id="slideBullets" style="list-style:none;padding:0;margin:0;"></ul>
+      <button id="glossaryToggle" onclick="toggleGlossary()" title="Show glossary for technical terms" style="
+        margin-top:14px;width:28px;height:28px;border-radius:50%;
+        border:1.5px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.04);
+        color:#8892a8;cursor:pointer;display:flex;align-items:center;justify-content:center;
+        transition:all 0.2s;
+      "><i class="fa-solid fa-info" style="font-size:12px;"></i></button>
+      <div id="glossaryPanel" style="display:none;margin-top:12px;padding:14px 16px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:6px;"></div>
+    </div>
+  </div>
+  <div style="position:absolute;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:12px;align-items:center;">
+    <button onclick="prevSlide()" style="padding:8px 20px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:#ccc;font-size:13px;cursor:pointer;">← Prev</button>
+    <span id="slideCounter" style="color:#6b7280;font-size:12px;min-width:60px;text-align:center;"></span>
+    <button onclick="nextSlide()" style="padding:8px 20px;border-radius:6px;border:1px solid rgba(181,122,255,0.4);background:rgba(181,122,255,0.15);color:#b57aff;font-size:13px;font-weight:600;cursor:pointer;">Next →</button>
+    <button onclick="closeExplain()" style="padding:8px 16px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#6b7280;font-size:12px;cursor:pointer;margin-left:16px;">✕ Close</button>
+  </div>
+</div>
+
+
+<div class="container">
+
+<!--
+  Cluster grid (in user-space SVG coords): cluster.x/y/w/h are stable.
+  All node coordinates are computed at runtime by routeFlows().
+-->
+<svg class="diagram fade-in" viewBox="0 0 1340 820" xmlns="http://www.w3.org/2000/svg" id="diagram">
+
+  <defs>
+    <marker id="arrow-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z" fill="#00e68a"/></marker>
+    <marker id="arrow-cyan"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z" fill="#00d4ff"/></marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z" fill="#FF9900"/></marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z" fill="#b57aff"/></marker>
+    <marker id="arrow-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z" fill="#ffcc33"/></marker>
+    <marker id="arrow-red"    viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z" fill="#ff6b6b"/></marker>
+  </defs>
+
+  <!-- ─── CLUSTER OUTLINES + LABELS ─── -->
+  <!-- 1. Edge -->
+  <rect class="cluster-outline out-edge" id="cluster-edge" x="30" y="30" width="460" height="240"/>
+  <text class="cluster-label-svg cb-edge" x="50" y="24">Edge Layer</text>
+  <circle class="cluster-num-circle" cx="52" cy="256" r="12" fill="rgba(0,212,255,0.15)" stroke="rgba(0,212,255,0.5)"/>
+  <text class="cluster-num-text" x="52" y="256" fill="#00d4ff">1</text>
+
+  <!-- 2. VPC -->
+  <rect class="cluster-outline out-vpc" id="cluster-vpc" x="520" y="30" width="500" height="240"/>
+  <text class="cluster-label-svg cb-vpc" x="540" y="24">VPC — Public ALB · Private ECS Fargate</text>
+  <circle class="cluster-num-circle" cx="542" cy="256" r="12" fill="rgba(0,230,138,0.15)" stroke="rgba(0,230,138,0.5)"/>
+  <text class="cluster-num-text" x="542" y="256" fill="#00e68a">2</text>
+
+  <!-- 3. AgentCore Runtime -->
+  <rect class="cluster-outline out-agent" id="cluster-agent" x="520" y="290" width="500" height="370"/>
+  <text class="cluster-label-svg cb-agent" x="540" y="284">Bedrock AgentCore Runtime</text>
+  <circle class="cluster-num-circle" cx="542" cy="646" r="12" fill="rgba(181,122,255,0.15)" stroke="rgba(181,122,255,0.5)"/>
+  <text class="cluster-num-text" x="542" y="646" fill="#b57aff">3</text>
+
+  <!-- 4. External Data Sources -->
+  <rect class="cluster-outline out-external" id="cluster-external" x="1050" y="30" width="270" height="730"/>
+  <text class="cluster-label-svg cb-external" x="1070" y="24">External Data Sources</text>
+  <circle class="cluster-num-circle" cx="1072" cy="746" r="12" fill="rgba(255,107,107,0.10)" stroke="rgba(255,107,107,0.4)"/>
+  <text class="cluster-num-text" x="1072" y="746" fill="#ff6b6b">4</text>
+
+  <!-- 5. Storage -->
+  <rect class="cluster-outline out-storage" id="cluster-storage" x="30" y="290" width="460" height="240"/>
+  <text class="cluster-label-svg cb-storage" x="50" y="284">Shared Storage — S3 Bucket</text>
+  <circle class="cluster-num-circle" cx="52" cy="516" r="12" fill="rgba(255,153,0,0.10)" stroke="rgba(255,153,0,0.4)"/>
+  <text class="cluster-num-text" x="52" y="516" fill="#FF9900">5</text>
+
+  <!-- 6. TiTiler -->
+  <rect class="cluster-outline out-tile" id="cluster-tile" x="30" y="550" width="460" height="220"/>
+  <text class="cluster-label-svg cb-tile" x="50" y="544">TiTiler Tile Server</text>
+  <circle class="cluster-num-circle" cx="52" cy="756" r="12" fill="rgba(255,204,51,0.15)" stroke="rgba(255,204,51,0.5)"/>
+  <text class="cluster-num-text" x="52" y="756" fill="#ffcc33">6</text>
+
+  <!-- ─── HTML CONTENT (foreignObjects) ─── -->
+
+  <!-- Cluster 1: Edge -->
+  <foreignObject x="30" y="30" width="460" height="240">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="ct">
+      <div class="row" style="gap:14px;align-items:center;">
+        <div class="node n-edge" data-anchor="browser" style="flex:0 0 130px;">
+          <img src="assets/users.svg" alt="Browser"/>
+          <div class="meta">
+            <div class="title">Browser</div>
+            <div class="detail">React + MapLibre</div>
+            <div class="detail">Cognito SDK</div>
+          </div>
+        </div>
+        <div class="col" style="gap:12px;">
+          <div class="node n-auth compact" data-anchor="cognito" title="Amazon Cognito User Pool. Admin-created users only, optional TOTP MFA. Issues JWTs (RS256) the backend verifies via the public JWKS endpoint.">
+            <img src="assets/cognito.svg" alt="Cognito"/>
+            <div class="meta">
+              <div class="title">Cognito</div>
+              <div class="detail">User Pool · MFA · JWT</div>
+            </div>
+          </div>
+          <div class="row" style="gap:8px;">
+            <div class="node n-edge compact" data-anchor="waf" style="flex:1;" title="AWS WAF v2. Three managed rule sets attached when stack is deployed in us-east-1: Common, KnownBadInputs, IpReputationList.">
+              <img src="assets/waf.svg" alt="WAF"/>
+              <div class="meta"><div class="title">WAF v2</div></div>
+            </div>
+            <div class="node n-edge compact" data-anchor="cloudfront" style="flex:1.4;" title="Amazon CloudFront. Terminates HTTPS, caches static assets, injects X-CloudFront-Secret on every origin request — the ALB rejects anything missing it (403).">
+              <img src="assets/cloudfront.svg" alt="CloudFront"/>
+              <div class="meta">
+                <div class="title">CloudFront</div>
+                <div class="detail">+ X-CF-Secret hdr</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </foreignObject>
+
+  <!-- Cluster 2: VPC (ALB + ECS) -->
+  <foreignObject x="520" y="30" width="500" height="240">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="ct" style="gap:14px;">
+      <div class="row" style="align-items:center;gap:14px;">
+        <div class="node n-compute" data-anchor="alb" style="flex:0 0 110px;text-align:center;flex-direction:column;align-items:center;" title="Application Load Balancer. Listener priority 1 forwards only when X-CloudFront-Secret matches; default is 403. idle_timeout=120s for SSE.">
+          <img src="assets/elb.svg" alt="ALB" style="width:32px;height:32px;"/>
+          <div class="meta" style="text-align:center;">
+            <div class="title">ALB</div>
+            <div class="detail">idle 120s · L7</div>
+          </div>
+        </div>
+        <div class="node n-compute" data-anchor="ecs" style="flex:1;flex-direction:column;align-items:stretch;" title="ECS Fargate service: 1 vCPU / 2 GB / desiredCount 2, autoscale 1–10. One Docker image: Express backend on :3001 serving the built React SPA from /public.">
+          <div style="display:flex;gap:10px;align-items:center;">
+            <img src="assets/ecs.svg" alt="ECS" style="width:30px;height:30px;flex-shrink:0;"/>
+            <div>
+              <div class="title" style="font-weight:700;color:#cfeacb;font-size:11.5px;">ECS Fargate · Express + React SPA</div>
+              <div class="detail">2× tasks · 1 vCPU · 2 GB · auto-scale 1–10</div>
+            </div>
+          </div>
+          <div class="pill-row" style="margin-top:8px;">
+            <div class="pill compute" style="flex:1;">JWT verify</div>
+            <div class="pill compute" style="flex:1;">SSE proxy</div>
+            <div class="pill compute" style="flex:1.2;">Pre-signed URLs</div>
+            <div class="pill compute" style="flex:1;">/api/scenario</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </foreignObject>
+
+  <!-- Cluster 3: AgentCore Runtime -->
+  <foreignObject x="520" y="290" width="500" height="370">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="ct" style="gap:12px;">
+      <div class="row" style="gap:8px;align-items:center;">
+        <img src="assets/bedrock-agentcore.svg" style="width:22px;height:22px;"/>
+        <div style="font-size:12px;font-weight:700;color:#d4b8ff;letter-spacing:0.04em;">AgentCore container · arm64 · Python 3.12</div>
+      </div>
+      <div class="row" style="gap:12px;">
+        <!-- Strands Agent (left, emphasized) -->
+        <div class="agent-card active" data-anchor="strands" style="flex:1;" title="The Strands Agent. Runs the LLM-tool loop, holds the system prompt with cachePoint, persists session history to S3, and streams tool-use events back to the backend.">
+          <div class="head" style="justify-content:center;flex-direction:column;text-align:center;gap:2px;">
+            <div class="label">Strands Agent</div>
+            <div class="sub">@app.entrypoint loop</div>
+          </div>
+          <div class="stages">
+            <div class="agent-stage">System prompt + cachePoint</div>
+            <div class="agent-stage">SlidingWindowConvManager(3)</div>
+            <div class="agent-stage">S3SessionManager (sessions/)</div>
+            <div class="agent-stage">stream_async → SSE chunks</div>
+          </div>
+        </div>
+        <!-- Right column: Bedrock + MCP -->
+        <div class="col" style="flex:1;gap:10px;">
+          <div class="agent-card" data-anchor="bedrock-inner" title="Amazon Bedrock hosts the model. Strands calls it through the BedrockModel client.">
+            <div class="head">
+              <img src="assets/bedrock.svg" alt="Bedrock"/>
+              <div class="label">Amazon Bedrock</div>
+            </div>
+            <div class="sub">Claude Sonnet 4.6</div>
+            <div class="sub" style="margin-bottom:0;">temp 0.1 · prompt caching</div>
+          </div>
+          <div class="agent-card" data-anchor="mcp" title="MCP server bundled in the agent container as a stdio child process. Exposes only search_places.">
+            <div class="head">
+              <i class="fa-solid fa-plug" style="color:#d4b8ff;font-size:18px;"></i>
+              <div class="label">MCP Server (stdio)</div>
+            </div>
+            <div class="sub">awslabs.aws_location</div>
+            <div class="sub">tool: search_places</div>
+            <div class="sub" style="margin-bottom:0;">child process</div>
+          </div>
+        </div>
+      </div>
+      <!-- Tools row -->
+      <div class="section-head purple">@tool functions:</div>
+      <div class="pill-row">
+        <div class="pill" data-anchor="tool-get-rasters">get_rasters</div>
+        <div class="pill">run_bandmath</div>
+        <div class="pill">display_visual</div>
+        <div class="pill" data-anchor="tool-find-boundary">find_location_boundary</div>
+        <div class="pill">calc_environmental_impact</div>
+      </div>
+      <div class="pill-row">
+        <div class="pill">get_best_geometry</div>
+        <div class="pill">create_bbox_from_coords</div>
+        <div class="pill">list_session_assets</div>
+        <div class="pill">calculator</div>
+      </div>
+    </div>
+  </foreignObject>
+
+  <!-- Cluster 4: External Data Sources -->
+  <foreignObject x="1050" y="30" width="270" height="730">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="ct" style="gap:8px;">
+      <div class="node n-external" data-anchor="ext-sentinel" style="flex-direction:column;" title="Sentinel-2 L2A scenes via Element 84 STAC API. The agent's get_rasters tool searches a 60-day backward window and pulls per-band COGs.">
+        <div style="display:flex;gap:10px;align-items:center;">
+          <img src="assets/satellite.svg" alt="Sentinel"/>
+          <div class="title">Sentinel-2 STAC</div>
+        </div>
+        <div class="meta" style="margin-top:8px;">
+          <div class="detail">earth-search.aws.element84.com</div>
+          <div class="detail">Public COGs · L2A · 10/20m bands</div>
+          <div class="detail">red · green · nir · nir08 · swir2 · TCI</div>
+        </div>
+      </div>
+      <div class="node n-external" data-anchor="ext-osm" style="flex-direction:column;" title="OpenStreetMap. The find_location_boundary tool uses osmnx to fetch named-feature polygons.">
+        <div style="display:flex;gap:10px;align-items:center;">
+          <img src="assets/osm.svg" alt="OSM"/>
+          <div class="title">OpenStreetMap</div>
+        </div>
+        <div class="meta" style="margin-top:8px;">
+          <div class="detail">via osmnx</div>
+          <div class="detail">named-feature boundaries</div>
+        </div>
+      </div>
+      <div class="node n-external" data-anchor="ext-bedrock" style="flex-direction:column;" title="Amazon Bedrock hosts the foundation model. Strands calls it through the BedrockModel client.">
+        <div style="display:flex;gap:10px;align-items:center;">
+          <img src="assets/bedrock.svg" alt="Bedrock"/>
+          <div class="title">Bedrock Foundation Models</div>
+        </div>
+        <div class="meta" style="margin-top:8px;">
+          <div class="detail">us.anthropic.claude-sonnet-4-6</div>
+          <div class="detail">cross-region inference profile</div>
+        </div>
+      </div>
+      <div class="node n-external" data-anchor="ext-location" style="flex-direction:column;" title="Amazon Location Service. Reached only via the bundled MCP server (search_places tool).">
+        <div style="display:flex;gap:10px;align-items:center;">
+          <img src="assets/amazon-location.svg" alt="Amazon Location"/>
+          <div class="title">Amazon Location Service</div>
+        </div>
+        <div class="meta" style="margin-top:8px;">
+          <div class="detail">via bundled MCP server</div>
+          <div class="detail">geocoding (search_places)</div>
+        </div>
+      </div>
+      <div class="node n-external" style="flex-direction:column;" title="Optional Langfuse OTLP endpoint for LLM tracing. Wire it up via LANGFUSE_* in geo_agent/.env and deploy_with_langfuse.sh.">
+        <div class="title">Langfuse (optional)</div>
+        <div class="meta" style="margin-top:6px;">
+          <div class="detail">OTLP traces · LLM observability</div>
+          <div class="detail">enabled by deploy_with_langfuse.sh</div>
+        </div>
+      </div>
+      <div class="node n-external" style="flex-direction:column;" title="Default observability path. The agent container starts under opentelemetry-instrument; ADOT ships logs and traces to CloudWatch.">
+        <div style="display:flex;gap:10px;align-items:center;">
+          <img src="assets/cloudwatch.svg" alt="CloudWatch"/>
+          <div class="title">CloudWatch + ADOT</div>
+        </div>
+        <div class="meta" style="margin-top:6px;">
+          <div class="detail">opentelemetry-instrument</div>
+          <div class="detail">logs + traces · default path</div>
+        </div>
+      </div>
+    </div>
+  </foreignObject>
+
+  <!-- Cluster 5: Storage -->
+  <foreignObject x="30" y="290" width="460" height="240">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="ct" style="gap:12px;">
+      <div class="row" style="gap:12px;align-items:flex-start;">
+        <div class="col" style="flex:0 0 130px;gap:8px;">
+          <div class="node n-storage" data-anchor="s3-bucket" style="flex-direction:column;" title="Single private S3 bucket. Block Public Access ALL, TLS only.">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <img src="assets/s3.svg" alt="S3" style="width:26px;height:26px;"/>
+              <div class="meta">
+                <div class="title">S3 Bucket</div>
+                <div class="detail">private · TLS only</div>
+              </div>
+            </div>
+          </div>
+          <div class="node n-auth compact" data-anchor="secrets" title="Secrets Manager entry for the CloudFront custom-header name. Header value is regenerated by CDK on every deploy.">
+            <img src="assets/secrets-manager.svg" alt="Secrets"/>
+            <div class="meta">
+              <div class="title" style="font-size:10px;">Secrets Manager</div>
+              <div class="detail">CF custom-header ref</div>
+            </div>
+          </div>
+        </div>
+        <div class="col" style="flex:1;gap:6px;">
+          <div class="section-head orange">PREFIXES</div>
+          <div class="pref pref-sessions">sessions/&lt;sid&gt;/ — Strands history</div>
+          <div class="pref pref-rasters">session_data/&lt;sid&gt;/rasters/ — TCI · NDVI · NDWI · NBR (COGs)</div>
+          <div class="pref pref-geometries">session_data/&lt;sid&gt;/geometries/ — AOI GeoJSON</div>
+          <div class="pref pref-usecases">use-cases/&lt;id&gt;/ — pre-baked scenarios</div>
+        </div>
+      </div>
+      <div style="font-size:9px;color:#a87830;line-height:1.5;">
+        <span style="color:rgba(255,153,0,0.85);font-weight:700;">IAM (scoped):</span>
+        ECS task → bedrock + agentcore + S3 (this bucket) ·
+        Agent role → bedrock + S3 + logs
+      </div>
+    </div>
+  </foreignObject>
+
+  <!-- Cluster 6: TiTiler -->
+  <foreignObject x="30" y="550" width="460" height="220">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="ct" style="gap:10px;">
+      <div class="caption" style="color:rgba(255,204,51,0.85);font-weight:600;">
+        API Key (rate-limit only): 100 rps · 200 burst · 20K/day
+      </div>
+      <div class="row" style="gap:12px;align-items:stretch;">
+        <div class="node n-tile" data-anchor="apigw" style="flex:0 0 140px;flex-direction:column;align-items:center;text-align:center;" title="API Gateway in front of the TiTiler Lambda. API Key + Usage Plan provide rate limiting.">
+          <img src="assets/api-gateway.svg" alt="API GW" style="width:32px;height:32px;"/>
+          <div class="meta" style="text-align:center;">
+            <div class="title">API Gateway</div>
+            <div class="detail">x-api-key required</div>
+          </div>
+        </div>
+        <div class="node n-tile" data-anchor="lambda" style="flex:1;flex-direction:column;align-items:center;text-align:center;" title="TiTiler is a FastAPI tile server, packaged as a Lambda Docker image and run via the AWS Lambda Web Adapter at /opt/bootstrap.">
+          <img src="assets/lambda.svg" alt="Lambda" style="width:32px;height:32px;"/>
+          <div class="meta" style="text-align:center;">
+            <div class="title">Lambda + Web Adapter</div>
+            <div class="detail">3008 MB · 30s · x86_64</div>
+            <div class="detail">FastAPI · TiTiler 0.24</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption tiny" style="line-height:1.6;">
+        <span style="color:rgba(255,204,51,0.7);font-weight:600;">Browser:</span>
+        1) ask backend for pre-signed URL of COG &nbsp;·&nbsp;
+        2) GET /cog/tiles/.../{z}/{x}/{y}.png?url=&lt;presigned&gt; &nbsp;·&nbsp;
+        3) MapLibre renders PNG layer &nbsp;·&nbsp;
+        4) CORS allows S3 GET/HEAD from CloudFront origin
+      </div>
+    </div>
+  </foreignObject>
+
+  <!-- ─── FLOWS LAYER (paths drawn by JS, on top of foreignObjects) ─── -->
+  <g id="flows"></g>
+
+</svg>
+
+<!-- ─── STATS BAR ─── -->
+<div class="stats-bar fade-in fade-in-2">
+  <div class="stat-card"><div class="value" style="color:#00e68a">3</div><div class="label">Deployable Components</div></div>
+  <div class="stat-card"><div class="value" style="color:#b57aff">~15min</div><div class="label">Full Deploy</div></div>
+  <div class="stat-card"><div class="value" style="color:#FF9900">1</div><div class="label">Shared S3 Bucket</div></div>
+  <div class="stat-card"><div class="value" style="color:#ffcc33">60d</div><div class="label">Sentinel-2 Search Window</div></div>
+  <div class="stat-card"><div class="value" style="color:#00d4ff">3</div><div class="label">Spectral Indices · NDVI · NDWI · NBR</div></div>
+  <div class="stat-card"><div class="value" style="color:#ff6b6b">3</div><div class="label">Pre-baked Scenarios</div></div>
+</div>
+
+<!-- ─── LEGEND ─── -->
+<div class="legend fade-in fade-in-3">
+  <div class="legend-item"><div class="legend-dash" style="color:#00e68a"></div><span>Request Flow (HTTPS)</span></div>
+  <div class="legend-item"><div class="legend-dash" style="color:#b57aff"></div><span>Agent Loop · Bedrock · MCP</span></div>
+  <div class="legend-item"><div class="legend-dash" style="color:#FF9900"></div><span>Auth (JWT) / S3 Reads &amp; Writes</span></div>
+  <div class="legend-item"><div class="legend-dash" style="color:#ffcc33"></div><span>Tile Rendering Path</span></div>
+  <div class="legend-item"><div class="legend-dash" style="color:#ff6b6b"></div><span>External APIs (STAC · OSM · Location)</span></div>
+  <div class="legend-item"><div class="legend-dash" style="color:#00d4ff"></div><span>Edge / Static Assets</span></div>
+  <div class="legend-item" style="margin-left:auto;color:#6b7280;font-size:10px;">
+    Strands · AgentCore · Claude Sonnet · MapLibre · TiTiler · us-east-1
+  </div>
+</div>
+
+</div>
+
+
+<script>
+/* ════════════════════════════════════════════════════════════════════
+   FLOW ROUTING
+   Reads each anchor's bounding box from the DOM, converts to SVG user
+   space, and draws curved paths between them. Re-runs on resize.
+   ════════════════════════════════════════════════════════════════════ */
+
+const SVG = document.getElementById('diagram');
+const FLOWS = document.getElementById('flows');
+
+// side: 'l'|'r'|'t'|'b' = which edge of the source/target node to attach to
+const FLOW_DEFS = [
+  // 1: Browser → Cognito (login)
+  { from: 'browser', fromSide: 't', to: 'cognito', toSide: 'l', cls: 'flow-orange', label: 'login (JWT)' },
+  // 1: Browser → CloudFront (HTTPS)
+  { from: 'browser', fromSide: 'r', to: 'cloudfront', toSide: 'l', cls: 'flow-green', label: 'HTTPS' },
+  // 1→2: CloudFront → ALB (with CF custom header)
+  { from: 'cloudfront', fromSide: 'r', to: 'alb', toSide: 'l', cls: 'flow-green', label: '+ X-CF-Secret' },
+  // 2: ALB → ECS
+  { from: 'alb', fromSide: 'r', to: 'ecs', toSide: 'l', cls: 'flow-green', label: ':3001' },
+  // 2: ECS → Cognito (verify JWT via JWKS)
+  { from: 'ecs', fromSide: 'l', to: 'cognito', toSide: 'r', cls: 'flow-orange', label: 'verify JWT (JWKS)' },
+  // 2→3: ECS → Strands Agent (InvokeAgentRuntime SSE)
+  { from: 'ecs', fromSide: 'b', to: 'strands', toSide: 't', cls: 'flow-purple', label: 'InvokeAgentRuntime · SSE' },
+  // 3 internal: Strands ↔ Bedrock
+  { from: 'strands', fromSide: 'r', to: 'bedrock-inner', toSide: 'l', cls: 'flow-purple', label: 'tool-use loop', labelAt: 0.5 },
+  // 3 internal: Strands ↔ MCP
+  { from: 'strands', fromSide: 'r', to: 'mcp', toSide: 'l', cls: 'flow-purple', label: 'stdio JSON-RPC', labelAt: 0.5 },
+  // 3→4: tools call externals
+  { from: 'tool-get-rasters',   fromSide: 'r', to: 'ext-sentinel',  toSide: 'l', cls: 'flow-red',   label: 'STAC search', labelAt: 0.25 },
+  { from: 'tool-find-boundary', fromSide: 'r', to: 'ext-osm',       toSide: 'l', cls: 'flow-red',   label: 'OSM fetch',   labelAt: 0.55 },
+  { from: 'mcp',                fromSide: 'r', to: 'ext-location',  toSide: 'l', cls: 'flow-red',   label: 'geocode',     labelAt: 0.75 },
+  // 3↔5: Strands ↔ S3 bucket
+  { from: 'strands', fromSide: 'l', to: 's3-bucket', toSide: 'r', cls: 'flow-orange', label: 'read/write COGs' },
+  // 5↔2: S3 → ECS (pre-signed URLs)
+  { from: 's3-bucket', fromSide: 't', to: 'ecs', toSide: 'l', cls: 'flow-orange', label: 'pre-signed URLs' },
+  // 6: Browser → APIGW (tile request)
+  { from: 'browser', fromSide: 'b', to: 'apigw', toSide: 't', cls: 'flow-yellow', label: 'tile request' },
+  // 6: APIGW → Lambda
+  { from: 'apigw', fromSide: 'r', to: 'lambda', toSide: 'l', cls: 'flow-yellow', label: 'x-api-key' },
+  // 6→5: Lambda → S3 (range read)
+  { from: 'lambda', fromSide: 't', to: 's3-bucket', toSide: 'b', cls: 'flow-yellow', label: 'range read' },
+];
+
+function anchorRect(name) {
+  // Scope lookup to the main diagram only — the Explain overlay clones the
+  // SVG (including data-anchor attrs), so document.querySelector would find
+  // the hidden clone first and return a zero-size rect.
+  const el = SVG.querySelector(`[data-anchor="${name}"]`);
+  if (!el) return null;
+  return el.getBoundingClientRect();
+}
+
+function svgPoint(clientX, clientY) {
+  const pt = SVG.createSVGPoint();
+  pt.x = clientX; pt.y = clientY;
+  return pt.matrixTransform(SVG.getScreenCTM().inverse());
+}
+
+function sidePoint(rect, side) {
+  // Returns the midpoint of the requested side of the rect, in client coords.
+  let x, y;
+  switch (side) {
+    case 'l': x = rect.left;  y = (rect.top + rect.bottom) / 2; break;
+    case 'r': x = rect.right; y = (rect.top + rect.bottom) / 2; break;
+    case 't': x = (rect.left + rect.right) / 2; y = rect.top; break;
+    case 'b': x = (rect.left + rect.right) / 2; y = rect.bottom; break;
+  }
+  return svgPoint(x, y);
+}
+
+function curvePath(a, b, sideA, sideB) {
+  // Cubic curve with control points perpendicular to the chosen sides,
+  // distance proportional to gap.
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy);
+  const k = Math.max(40, dist * 0.45);
+  const ax = sideA === 'l' ? -1 : sideA === 'r' ? 1 : 0;
+  const ay = sideA === 't' ? -1 : sideA === 'b' ? 1 : 0;
+  const bx = sideB === 'l' ? -1 : sideB === 'r' ? 1 : 0;
+  const by = sideB === 't' ? -1 : sideB === 'b' ? 1 : 0;
+  const c1 = { x: a.x + ax * k, y: a.y + ay * k };
+  const c2 = { x: b.x + bx * k, y: b.y + by * k };
+  return {
+    d: `M ${a.x.toFixed(1)},${a.y.toFixed(1)} C ${c1.x.toFixed(1)},${c1.y.toFixed(1)} ${c2.x.toFixed(1)},${c2.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`,
+    a, b, c1, c2,
+  };
+}
+
+// Cubic Bezier point at parameter t ∈ [0,1].
+function bezierPoint(p0, p1, p2, p3, t) {
+  const u = 1 - t;
+  return {
+    x: u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
+    y: u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
+  };
+}
+
+const LABEL_CLASS = {
+  'flow-green':  'lab-green',
+  'flow-cyan':   'lab-cyan',
+  'flow-orange': 'lab-orange',
+  'flow-purple': 'lab-purple',
+  'flow-yellow': 'lab-yellow',
+  'flow-red':    'lab-red',
+};
+
+function routeFlows() {
+  FLOWS.innerHTML = '';
+  for (const f of FLOW_DEFS) {
+    const ra = anchorRect(f.from), rb = anchorRect(f.to);
+    if (!ra || !rb) continue;
+    const a = sidePoint(ra, f.fromSide);
+    const b = sidePoint(rb, f.toSide);
+    const cv = curvePath(a, b, f.fromSide, f.toSide);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', cv.d);
+    path.setAttribute('class', `flow-path ${f.cls}`);
+    FLOWS.appendChild(path);
+
+    if (f.label) {
+      const t = typeof f.labelAt === 'number' ? f.labelAt : 0.32;
+      const lp = bezierPoint(cv.a, cv.c1, cv.c2, cv.b, t);
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', lp.x.toFixed(1));
+      text.setAttribute('y', (lp.y - 4).toFixed(1));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('class', `flow-label ${LABEL_CLASS[f.cls] || ''}`);
+      text.textContent = f.label;
+      FLOWS.appendChild(text);
+    }
+  }
+}
+
+// Re-route on resize / fonts / images loading
+window.addEventListener('load', routeFlows);
+window.addEventListener('resize', () => requestAnimationFrame(routeFlows));
+document.fonts && document.fonts.ready.then(routeFlows);
+
+/* ════════════════════════════════════════════════════════════════════
+   EXPLAIN MODE (slideshow)
+   ════════════════════════════════════════════════════════════════════ */
+
+const GLOSSARY = {
+  "Cognito": "Amazon's managed identity service. Hosts a User Pool, issues JWTs after login, exposes a JWKS endpoint for verifiers.",
+  "JWT": "JSON Web Token. Cognito issues these on login; the backend verifies them with the public JWKS keys.",
+  "JWKS": "JSON Web Key Set. The public-key endpoint Cognito exposes so any service can verify tokens it issued.",
+  "WAF": "AWS Web Application Firewall. Three managed rule sets are attached when deployed in us-east-1 (Common, KnownBadInputs, IpReputation).",
+  "CloudFront": "AWS's CDN. Terminates HTTPS, injects an X-CloudFront-Secret header, forwards to the ALB.",
+  "X-CloudFront-Secret": "A 32-byte random hex string injected by CloudFront. The ALB only forwards traffic that carries it; direct ALB access returns 403.",
+  "ALB": "Application Load Balancer. Layer-7. Idle timeout bumped to 120s for SSE.",
+  "ECS Fargate": "Serverless container hosting. Runs the React UI Docker image (Express backend + built React SPA).",
+  "SSE": "Server-Sent Events. The streaming protocol used end-to-end so users see tool-call events appear as the agent runs.",
+  "AgentCore Runtime": "Bedrock-managed container hosting for AI agents. Provides the InvokeAgentRuntime streaming endpoint, IAM execution role, log groups, ADOT tracing.",
+  "Strands": "The Python agent framework used here. Wires LLM, tools, sessions, telemetry into the agent loop.",
+  "Bedrock": "Amazon's hosted-foundation-model service. We use Claude Sonnet 4.6 via the cross-region inference profile.",
+  "Cache point": "A SystemContentBlock(cachePoint=...) marker telling Bedrock to cache the prompt prefix, cutting cost and latency on multi-turn chats.",
+  "S3SessionManager": "Strands abstraction that persists conversation history to S3 keyed by session ID. No DynamoDB needed.",
+  "SlidingWindowConversationManager": "Trims the prompt to the last N turns (window_size=3 here) so the context stays small.",
+  "MCP": "Model Context Protocol. A small spec for how agents talk to tool servers. Our MCP server runs as a stdio child process inside the agent container.",
+  "MCP stdio client": "An MCP server invoked as a subprocess and communicated with over stdin/stdout JSON-RPC.",
+  "search_places": "The single tool exposed by the bundled awslabs.aws-location MCP server. Geocodes place names to lat/lon.",
+  "STAC": "SpatioTemporal Asset Catalog. JSON convention for indexing satellite imagery. We query the public Element 84 catalog.",
+  "Sentinel-2": "ESA Earth-observation satellites. Free, public, hosted on AWS as Cloud-Optimized GeoTIFFs (COGs).",
+  "COG": "Cloud-Optimized GeoTIFF. A GeoTIFF organized so HTTP range requests can fetch only the bytes you need.",
+  "OSM": "OpenStreetMap. Source of named-feature boundaries via the osmnx library.",
+  "TiTiler": "Open-source FastAPI tile server for COGs. Packaged here as a Lambda Docker image.",
+  "Lambda Web Adapter": "AWS Rust binary that bridges Lambda's invocation model to a regular HTTP server (FastAPI in our case).",
+  "API Gateway": "Front of the TiTiler Lambda. API Key + Usage Plan provide rate limiting (not authorization).",
+  "Pre-signed URL": "A short-lived signed S3 URL that lets the browser read a private object for an hour. Minted by the backend.",
+  "MapLibre": "Open-source MapLibre GL JS renders the interactive map and consumes PNG tiles from TiTiler.",
+  "NDVI": "Normalized Difference Vegetation Index = (NIR − Red) / (NIR + Red). Vegetation health.",
+  "NDWI": "Normalized Difference Water Index = (Green − NIR) / (Green + NIR). Water bodies.",
+  "NBR": "Normalized Burn Ratio = (NIR08 − SWIR2) / (NIR08 + SWIR2). Burn severity.",
+  "Scenario": "A pre-baked use case under use-cases/<id>/ in S3 (config + geometry + narrative + before/after rasters).",
+};
+
+// viewBoxes target the cluster-outline rects (by their stable x/y/w/h above).
+const SLIDES = [
+  {
+    step: "Step 1 of 6", title: "Edge Layer — Auth + Delivery",
+    viewBox: "20 0 480 280", color: "#00d4ff",
+    glossary: ["Cognito","JWT","JWKS","WAF","CloudFront"],
+    bullets: [
+      "User logs in via Amazon Cognito (User Pool, admin-created users, optional TOTP MFA)",
+      "Cognito issues an ID token (JWT, RS256); the SPA stores it and includes it on every API call",
+      "Browser then opens https://<cloudfront-domain> for chat + map UI",
+      "AWS WAF (deployed only in us-east-1) screens the CDN edge with three managed rule sets",
+      "CloudFront terminates TLS, caches static assets (.js/.css/.png), and forwards API calls uncached",
+      "CloudFront injects X-CloudFront-Secret on every origin request — the ALB rejects anything without it (403)",
+    ],
+  },
+  {
+    step: "Step 2 of 6", title: "VPC — ALB + ECS Fargate Backend",
+    viewBox: "510 0 510 280", color: "#00e68a",
+    glossary: ["ALB","ECS Fargate","SSE","X-CloudFront-Secret","JWT"],
+    bullets: [
+      "ALB at Layer 7 (HTTP/80 internally) with idle_timeout=120s for long SSE streams",
+      "Listener priority 1 forwards only when X-CloudFront-Secret header matches; default action is 403",
+      "ECS Fargate service: 1 vCPU / 2 GB / desired 2, auto-scales 1–10 on CPU 70% / mem 80%",
+      "One Docker image: Express backend on :3001 serving the built React SPA from /public",
+      "Backend verifies the Cognito JWT against JWKS on every /api/* call (cached 1h)",
+      "Holds AWS credentials (task role); browser never does. Mints S3 pre-signed URLs and proxies the agent SSE stream.",
+    ],
+  },
+  {
+    step: "Step 3 of 6", title: "AgentCore Runtime — Strands + Claude",
+    viewBox: "510 280 510 380", color: "#b57aff",
+    glossary: ["AgentCore Runtime","Strands","Bedrock","Cache point","S3SessionManager","SlidingWindowConversationManager"],
+    bullets: [
+      "Backend calls InvokeAgentRuntime(payload, sessionId) with the user prompt + scenario_id",
+      "Strands Agent runs the tool-use loop: LLM → tool → observation → LLM, streaming events back",
+      "Model: Claude Sonnet 4.6 on Bedrock (us.anthropic.claude-sonnet-4-6, temperature 0.1)",
+      "System prompt has a cachePoint so Bedrock reuses the prefix on every turn (much cheaper)",
+      "S3SessionManager persists message history per session_id; no DynamoDB needed",
+      "SlidingWindowConversationManager(window_size=3, truncate_results=True) bounds the prompt size",
+      "Tools list: native @tool functions + MCP-discovered tools, mixed transparently",
+    ],
+  },
+  {
+    step: "Step 4 of 6", title: "Tools & External Data",
+    viewBox: "510 280 800 480", color: "#ff6b6b",
+    glossary: ["MCP","MCP stdio client","search_places","STAC","Sentinel-2","COG","OSM","NDVI","NDWI","NBR"],
+    bullets: [
+      "Bundled MCP server (awslabs.aws_location_server) runs as a stdio child process inside the agent container — exposes search_places only",
+      "find_location_boundary calls OpenStreetMap via osmnx for named places (Hyde Park, Paris, ...)",
+      "get_rasters queries the Element 84 STAC catalog for Sentinel-2 L2A scenes — 60-day backward window",
+      "Best Sentinel-2 tile is selected by AOI coverage %, then sorted by cloud %",
+      "Bands (red, green, nir, nir08, swir2, tci) are clipped to the AOI and uploaded to S3 as new COGs",
+      "run_bandmath computes NDVI / NDWI / NBR from the bands; result is another COG in S3",
+      "display_visual is a marker tool — its only job is to appear in the stream so the frontend renders the layer",
+    ],
+  },
+  {
+    step: "Step 5 of 6", title: "Storage — One S3 Bucket",
+    viewBox: "20 280 470 260", color: "#FF9900",
+    glossary: ["Pre-signed URL","Scenario"],
+    bullets: [
+      "Single private bucket: geospatial-agent-on-aws-${AccountId} (Block Public Access ALL, TLS only)",
+      "session_data/<session_id>/geometries/ — GeoJSON AOIs (EPSG:4326)",
+      "session_data/<session_id>/rasters/ — clipped TCI / band / index COGs",
+      "sessions/<session_id>/ — Strands conversation history (managed by S3SessionManager)",
+      "use-cases/<scenario_id>/ — pre-baked demos: config.json, geometry.geojson, narrative.md, before/, after/",
+      "Backend mints 1-hour pre-signed URLs so the browser can read these objects without credentials",
+    ],
+  },
+  {
+    step: "Step 6 of 6", title: "TiTiler — Tiles for the Map",
+    viewBox: "20 540 480 240", color: "#ffcc33",
+    glossary: ["TiTiler","Lambda Web Adapter","API Gateway","Pre-signed URL","MapLibre","COG"],
+    bullets: [
+      "Browser receives an S3 URL of a COG (from a display_visual tool call) and asks the backend for a pre-signed URL",
+      "MapLibre GL fetches PNG tiles from TiTiler: GET /cog/tiles/.../{z}/{x}/{y}.png?url=<presigned>",
+      "API Gateway requires the x-api-key header; the key is rate-limit (100 rps / 200 burst / 20k/day), not authorization",
+      "Lambda Docker image runs TiTiler (FastAPI) under the AWS Lambda Web Adapter at /opt/bootstrap",
+      "TiTiler reads the COG via HTTP range requests; only the bytes for the requested tile are pulled from S3",
+      "Result: PNG tiles render as a layer in MapLibre. Geometry GeoJSONs are loaded directly via the backend's /api/geometry proxy.",
+    ],
+  },
+];
+
+let currentSlide = 0;
+
+function startExplain() {
+  // Re-route flows first so cloned SVG includes them.
+  routeFlows();
+  const main = document.getElementById('diagram');
+  const slide = document.getElementById('slideSvg');
+  slide.innerHTML = main.innerHTML;
+  // viewBox initially matches main; will be set per slide.
+  currentSlide = 0;
+  showSlide(0);
+  document.getElementById('slideshow').style.display = 'block';
+  document.addEventListener('keydown', handleKey);
+}
+function closeExplain() {
+  document.getElementById('slideshow').style.display = 'none';
+  document.removeEventListener('keydown', handleKey);
+}
+function handleKey(e) {
+  if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextSlide(); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); prevSlide(); }
+  if (e.key === 'Escape') closeExplain();
+}
+function nextSlide() { if (currentSlide < SLIDES.length - 1) showSlide(++currentSlide); else closeExplain(); }
+function prevSlide() { if (currentSlide > 0) showSlide(--currentSlide); }
+
+function toggleGlossary() {
+  const panel = document.getElementById('glossaryPanel');
+  const btn = document.getElementById('glossaryToggle');
+  if (panel.style.display === 'none') {
+    panel.style.display = 'block';
+    btn.style.borderColor = 'rgba(255,255,255,0.4)';
+    btn.style.color = '#e0e0e0';
+  } else {
+    panel.style.display = 'none';
+    btn.style.borderColor = 'rgba(255,255,255,0.2)';
+    btn.style.color = '#8892a8';
+  }
+}
+function renderGlossary(idx) {
+  const panel = document.getElementById('glossaryPanel');
+  const keys = SLIDES[idx].glossary || [];
+  const toggle = document.getElementById('glossaryToggle');
+  if (keys.length === 0) { toggle.style.display = 'none'; panel.style.display = 'none'; return; }
+  toggle.style.display = 'flex';
+  panel.style.display = 'none';
+  const color = SLIDES[idx].color;
+  panel.innerHTML = keys.map(k =>
+    `<div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.04);">
+      <span style="font-weight:700;color:${color};font-size:12px;">${k}</span>
+      <div style="font-size:12px;color:#9ca3af;line-height:1.5;margin-top:3px;">${GLOSSARY[k] || ''}</div>
+    </div>`).join('');
+}
+function showSlide(idx) {
+  const s = SLIDES[idx];
+  const slide = document.getElementById('slideSvg');
+  slide.setAttribute('viewBox', s.viewBox);
+  document.getElementById('slideStep').textContent = s.step;
+  document.getElementById('slideStep').style.color = s.color;
+  document.getElementById('slideTitle').textContent = s.title;
+  document.getElementById('slideTitle').style.color = s.color;
+  document.getElementById('slideCounter').textContent = `${idx + 1} / ${SLIDES.length}`;
+  const ul = document.getElementById('slideBullets');
+  ul.innerHTML = '';
+  s.bullets.forEach((text, i) => {
+    const li = document.createElement('li');
+    li.style.cssText = `padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:14px;line-height:1.6;color:#c8ccd8;opacity:0;animation:fade-up 0.4s ease-out forwards;animation-delay:${0.1 + i * 0.08}s;display:flex;gap:10px;align-items:flex-start;`;
+    li.innerHTML = `<span style="color:${s.color};font-weight:700;font-size:11px;margin-top:3px;">●</span>${text}`;
+    ul.appendChild(li);
+  });
+  renderGlossary(idx);
+}
+</script>
+
+</body>
+</html>
