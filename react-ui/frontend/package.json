@@ -15,9 +15,9 @@
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.940.0",
-    "@geomatico/maplibre-cog-protocol": "^0.8.0",
+    "@geomatico/maplibre-cog-protocol": "^0.9.2",
     "@maplibre/maplibre-gl-compare": "^0.5.0",
-    "maplibre-gl": "^4.1.2",
+    "maplibre-gl": "^6.8.0",
     "maplibre-gl-draw": "^1.6.9",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
