@@ -10,5 +10,5 @@ new TitilerStack(app, 'TitilerStack', {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
   },
-  description: 'TiTiler Lambda + API Gateway with API Key',
+  description: 'TiTiler Lambda + API Gateway with API Key (uksb-gn5jh56ehl)(tag:titiler)',
 });

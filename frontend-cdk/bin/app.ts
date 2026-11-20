@@ -18,7 +18,7 @@ const environment = app.node.tryGetContext('environment') || 'dev';
 
 const stack = new GeospatialAgentStack(app, stackName, {
   env,
-  description: 'Geospatial Agent on AWS - Satellite Image Analysis Application',
+  description: 'Geospatial Agent on AWS - Satellite Image Analysis Application (uksb-gn5jh56ehl)(tag:frontend)',
   tags: {
     Project: 'GeospatialAgent',
     Environment: environment,
@@ -35,7 +35,7 @@ new ChangeDetectionStack(app, 'ChangeDetectionStack', {
   // Deploy in the LGND data region (us-west-2) so the Lambda's parquet reads are
   // local rather than cross-region. Override with LGND_LAMBDA_REGION if needed.
   env: { account: env.account, region: process.env.LGND_LAMBDA_REGION || 'us-west-2' },
-  description: 'Optional LGND embedding Lambda for region-wide change scan',
+  description: 'Optional LGND embedding Lambda for region-wide change scan (uksb-gn5jh56ehl)(tag:change-detection)',
   tags: {
     Project: 'GeospatialAgent',
     Environment: environment,
