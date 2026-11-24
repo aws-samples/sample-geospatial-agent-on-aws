@@ -9,12 +9,13 @@ RUN --mount=type=cache,target=/var/cache/apt \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install miniconda with Python 3.12 support (ARM64 required for AgentCore)
+# Install Miniforge (conda-forge only, ARM64 required for AgentCore).
+# Miniconda mixes in the defaults channel, which breaks the conda-forge libxml2 that rasterio links to.
 RUN --mount=type=cache,target=/tmp/conda_cache \
-    if [ ! -f /tmp/conda_cache/miniconda.sh ]; then \
-        wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh -O /tmp/conda_cache/miniconda.sh; \
+    if [ ! -f /tmp/conda_cache/miniforge.sh ]; then \
+        wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh -O /tmp/conda_cache/miniforge.sh; \
     fi && \
-    bash /tmp/conda_cache/miniconda.sh -b -p /opt/conda && \
+    bash /tmp/conda_cache/miniforge.sh -b -p /opt/conda && \
     /opt/conda/bin/conda clean -afy
 
 # Add conda to PATH and accept TOS via environment
